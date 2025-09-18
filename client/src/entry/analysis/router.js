@@ -1,4 +1,5 @@
 import { getGalaxyInstance } from "app";
+import ChatGXY from "components/ChatGXY";
 import CitationsList from "components/Citation/CitationsList";
 import ClientError from "components/ClientError";
 import CollectionEditView from "components/Collections/common/CollectionEditView";
@@ -6,7 +7,6 @@ import DatasetList from "components/Dataset/DatasetList";
 import DatasetView from "components/Dataset/DatasetView";
 import DatasetDetails from "components/DatasetInformation/DatasetDetails";
 import FormGeneric from "components/Form/FormGeneric";
-import GalaxyWizard from "components/GalaxyWizard";
 import HelpTerm from "components/Help/HelpTerm";
 import HistoryExportTasks from "components/History/Export/HistoryExport";
 import HistoryPublished from "components/History/HistoryPublished";
@@ -525,8 +525,9 @@ export function getRouter(Galaxy) {
                         component: TourList,
                     },
                     {
-                        path: "wizard",
-                        component: GalaxyWizard,
+                        path: "chatgxy",
+                        component: ChatGXY,
+                        redirect: redirectAnon(),
                     },
                     {
                         path: "tours/:tourId",
