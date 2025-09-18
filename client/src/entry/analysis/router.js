@@ -16,6 +16,7 @@ import { patchRouterPush } from "./router-push";
 
 import CenterFrame from "./modules/CenterFrame.vue";
 import AboutGalaxy from "@/components/AboutGalaxy.vue";
+import ChatGXY from "@/components/ChatGXY.vue";
 import AvailableDatatypes from "@/components/AvailableDatatypes/AvailableDatatypes.vue";
 import CitationsList from "@/components/Citation/CitationsList.vue";
 import ClientError from "@/components/ClientError.vue";
@@ -547,8 +548,9 @@ export function getRouter(Galaxy) {
                         component: TourList,
                     },
                     {
-                        path: "wizard",
-                        component: GalaxyWizard,
+                        path: "chatgxy",
+                        component: ChatGXY,
+                        redirect: redirectAnon(),
                     },
                     {
                         path: "tours/:tourId",
