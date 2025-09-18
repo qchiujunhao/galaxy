@@ -533,75 +533,75 @@ class TestAgentUnitMocked:
     async def test_workflow_orchestrator_agent_mocked(self):
         """Test WorkflowOrchestratorAgent with mocked responses."""
         from galaxy.agents.orchestrator import (
-            TaskDecomposition,
+            AgentPlan,
             WorkflowOrchestratorAgent,
         )
 
         agent = WorkflowOrchestratorAgent(self.deps)
 
-        # Test 1: Query that should NOT trigger orchestration (single domain)
-        with patch.object(agent, "_run_with_retry") as mock_run:
-            # Mock a decomposition that indicates single agent is sufficient
-            mock_run.return_value = MagicMock(
-                data=TaskDecomposition(
-                    required_agents=["tool_recommendation"],
-                    execution_strategy="sequential",
-                    task_breakdown=["Find tools for RNA-seq"],
-                    reasoning="Single tool recommendation needed",
-                    requires_orchestration=False,
-                    confidence="medium",
-                )
+        # Test 1: Query that should NOT trigger orchestration (single agent)
+        with patch.object(agent, "_get_agent_plan") as mock_get_plan:
+            # Mock a plan that indicates single agent is sufficient
+            mock_get_plan.return_value = AgentPlan(
+                agents=["tool_recommendation"],
+                sequential=False,
+                reasoning="Single tool recommendation needed",
             )
 
-            response = await agent.process("I need tools for RNA-seq analysis")
+            # Mock the actual agent call to avoid running it
+            with patch("galaxy.agents.agent_registry.get_agent") as mock_get_agent:
+                mock_tool_agent = AsyncMock()
+                mock_tool_agent.process.return_value = MagicMock(
+                    content="Use BWA-MEM for alignment.",
+                    agent_type="tool_recommendation",
+                )
+                mock_get_agent.return_value = mock_tool_agent
 
-            # Should delegate to single agent, not orchestrate
-            assert response.agent_type == "orchestrator"
-            assert response.metadata.get("orchestration_needed") is False
-            assert response.metadata.get("delegated_to") == "tool_recommendation"
+                response = await agent.process("I need tools for RNA-seq analysis")
+
+                # Should not orchestrate, just return single agent response
+                assert response.agent_type == "orchestrator"
+                assert response.metadata.get("agents_used") == ["tool_recommendation"]
+                assert "BWA-MEM" in response.content
 
     @pytest.mark.asyncio
     async def test_workflow_orchestrator_sequential_execution(self):
         """Test orchestrator sequential workflow execution."""
         from galaxy.agents.orchestrator import (
-            TaskDecomposition,
+            AgentPlan,
             WorkflowOrchestratorAgent,
         )
 
         agent = WorkflowOrchestratorAgent(self.deps)
 
-        # Mock a complex decomposition requiring orchestration
-        complex_decomposition = TaskDecomposition(
-            required_agents=["error_analysis", "tool_recommendation", "gtn_training"],
-            execution_strategy="sequential",
-            task_breakdown=["Analyze the tool error", "Find alternative tools", "Provide training materials"],
+        # Mock a complex plan requiring sequential orchestration
+        complex_plan = AgentPlan(
+            agents=["error_analysis", "tool_recommendation", "gtn_training"],
+            sequential=True,
             reasoning="Multi-step workflow: error diagnosis -> tool alternatives -> learning resources",
-            requires_orchestration=True,
-            confidence="high",
         )
 
         # Mock each agent call in the sequential workflow
         with (
-            patch.object(agent, "_run_with_retry") as mock_run,
+            patch.object(agent, "_get_agent_plan") as mock_get_plan,
             patch("galaxy.agents.agent_registry.get_agent") as mock_get_agent,
         ):
-
-            mock_run.return_value = MagicMock(data=complex_decomposition)
+            mock_get_plan.return_value = complex_plan
 
             # Mock individual agent responses
             mock_error_agent = AsyncMock()
             mock_error_agent.process.return_value = MagicMock(
-                content="Tool failed due to memory issues", confidence="high", agent_type="error_analysis"
+                content="Tool failed due to memory issues", agent_type="error_analysis"
             )
 
             mock_tool_agent = AsyncMock()
             mock_tool_agent.process.return_value = MagicMock(
-                content="Alternative tools: HISAT2, STAR", confidence="high", agent_type="tool_recommendation"
+                content="Alternative tools: HISAT2, STAR", agent_type="tool_recommendation"
             )
 
             mock_training_agent = AsyncMock()
             mock_training_agent.process.return_value = MagicMock(
-                content="Training available: RNA-seq tutorial", confidence="high", agent_type="gtn_training"
+                content="Training available: RNA-seq tutorial", agent_type="gtn_training"
             )
 
             # Configure mock to return different agents
@@ -623,8 +623,7 @@ class TestAgentUnitMocked:
 
             # Verify orchestration occurred
             assert response.agent_type == "orchestrator"
-            assert response.metadata.get("orchestration_attempted") is True
-            assert response.metadata.get("execution_strategy") == "sequential"
+            assert response.metadata.get("execution_type") == "sequential"
             assert "memory issues" in response.content
             assert "Alternative tools" in response.content
             assert "Training available" in response.content
@@ -638,38 +637,34 @@ class TestAgentUnitMocked:
     async def test_workflow_orchestrator_parallel_execution(self):
         """Test orchestrator parallel workflow execution."""
         from galaxy.agents.orchestrator import (
-            TaskDecomposition,
+            AgentPlan,
             WorkflowOrchestratorAgent,
         )
 
         agent = WorkflowOrchestratorAgent(self.deps)
 
-        # Mock parallel decomposition
-        parallel_decomposition = TaskDecomposition(
-            required_agents=["tool_recommendation", "gtn_training"],
-            execution_strategy="parallel",
-            task_breakdown=["Find tools", "Get training materials"],
+        # Mock parallel plan
+        parallel_plan = AgentPlan(
+            agents=["tool_recommendation", "gtn_training"],
+            sequential=False,
             reasoning="Independent tasks can run in parallel",
-            requires_orchestration=True,
-            confidence="high",
         )
 
         with (
-            patch.object(agent, "_run_with_retry") as mock_run,
+            patch.object(agent, "_get_agent_plan") as mock_get_plan,
             patch("galaxy.agents.agent_registry.get_agent") as mock_get_agent,
         ):
-
-            mock_run.return_value = MagicMock(data=parallel_decomposition)
+            mock_get_plan.return_value = parallel_plan
 
             # Mock agent responses
             mock_tool_agent = AsyncMock()
             mock_tool_agent.process.return_value = MagicMock(
-                content="Recommended tools: BWA, Bowtie2", confidence="high", agent_type="tool_recommendation"
+                content="Recommended tools: BWA, Bowtie2", agent_type="tool_recommendation"
             )
 
             mock_training_agent = AsyncMock()
             mock_training_agent.process.return_value = MagicMock(
-                content="Available tutorials: Alignment workflow", confidence="high", agent_type="gtn_training"
+                content="Available tutorials: Alignment workflow", agent_type="gtn_training"
             )
 
             def get_agent_side_effect(agent_type, deps):
@@ -686,28 +681,26 @@ class TestAgentUnitMocked:
 
             # Verify parallel execution
             assert response.agent_type == "orchestrator"
-            assert response.metadata.get("execution_strategy") == "parallel"
+            assert response.metadata.get("execution_type") == "parallel"
             assert "Recommended tools" in response.content
             assert "Available tutorials" in response.content
 
     @pytest.mark.asyncio
     async def test_workflow_orchestrator_fallback_behavior(self):
-        """Test orchestrator fallback when decomposition fails."""
+        """Test orchestrator fallback when planning fails."""
         from galaxy.agents.orchestrator import WorkflowOrchestratorAgent
 
         agent = WorkflowOrchestratorAgent(self.deps)
 
-        # Mock decomposition failure
-        with patch.object(agent, "_run_with_retry") as mock_run:
-            mock_run.side_effect = Exception("LLM service unavailable")
+        # Mock planning failure
+        with patch.object(agent, "_get_agent_plan") as mock_get_plan:
+            mock_get_plan.side_effect = Exception("LLM service unavailable")
 
             response = await agent.process("Complex query that should trigger fallback")
 
             # Should fall back gracefully
             assert response.agent_type == "orchestrator"
-            assert response.confidence == "low"
-            assert response.metadata.get("fallback") is True
-            assert "having trouble" in response.content.lower()
+            assert "having trouble" in response.content
 
 
 # ============================================================================

@@ -1,36 +1,5 @@
 """
 Query router agent for intelligent request routing.
-
-WHAT THIS AGENT DOES:
-- Serves as the central coordinator/dispatcher for all user queries
-- Analyzes incoming queries to determine which specialist agent should handle them
-- Can provide direct responses for simple meta-questions (citations, greetings, etc.)
-- Maintains conversation context awareness across messages
-- Routes to: error_analysis, custom_tool, dataset_analyzer, or tool_recommendation agents
-
-CURRENT CAPABILITIES:
-- Keyword-based routing with confidence scoring
-- Direct response for Galaxy citations and meta-questions
-- Fallback routing when AI analysis fails
-- Context-aware routing using conversation history
-- Structured output with routing decisions and reasoning
-
-KNOWN ISSUES:
-- Routing logic is primarily keyword-based, not semantic
-- Sometimes routes tool questions to wrong specialist
-- Conversation history context could be better utilized
-- Confidence levels are somewhat arbitrary
-- No learning from user feedback on routing quality
-
-PLANNED IMPROVEMENTS:
-- Implement semantic understanding for better routing accuracy
-- Add dynamic agent discovery (register new agents automatically)
-- Learn from user feedback to improve routing over time
-- Better multi-agent coordination for complex queries
-- Add caching for common routing patterns
-- Implement priority-based routing for urgent issues
-- Add ability to route to multiple agents in parallel
-- Better handling of ambiguous queries with clarification
 """
 
 import logging
@@ -96,129 +65,20 @@ class QueryRouterAgent(BaseGalaxyAgent):
     def get_system_prompt(self) -> str:
         """Get the system prompt for the router agent."""
         return """
-        You are an expert Galaxy platform routing coordinator. Your role is to understand the user's intent 
-        and route their query to the most appropriate specialist agent.
-        
-        CONTEXT AWARENESS:
-        When conversation history is provided, carefully review it to understand the full context of the current query.
-        Users often refer to previous messages implicitly.
-        
-        AVAILABLE SPECIALIST AGENTS:
-        
-        1. **error_analysis** - Specializes in:
-           - Debugging job failures and understanding error messages
-           - Analyzing stderr/stdout output and exit codes
-           - Troubleshooting tool execution problems
-           - Identifying resource limitations or configuration issues
-           
-        2. **custom_tool** - Specializes in:
-           - Creating new Galaxy tools from descriptions
-           - Generating tool wrappers and YAML definitions
-           - Configuring tool parameters and requirements
-           - Converting command-line tools into Galaxy tools
-           
-        3. **dataset_analyzer** - Specializes in:
-           - Analyzing dataset content and structure
-           - Data quality assessment and validation
-           - Format conversion and preprocessing recommendations
-           - Identifying data issues and anomalies
-           
-        4. **tool_recommendation** - Specializes in:
-           - Finding the right Galaxy tool for any analysis task
-           - Suggesting tool parameters and configurations
-           - Recommending workflows for multi-step analyses
-           - Explaining tool capabilities and usage
-           
-        5. **gtn_training** - Specializes in:
-           - Finding relevant Galaxy training materials and tutorials
-           - Creating learning paths for specific topics
-           - Explaining how to use Galaxy tools with hands-on examples
-           - Recommending tutorials based on skill level
-           
-        6. **orchestrator** - Coordinates multiple agents for complex tasks:
-           - Multi-faceted problems requiring multiple specialist perspectives
-           - Complex workflows involving error resolution + tool selection + learning
-           - Queries that benefit from comprehensive, coordinated responses
-           - Tasks requiring both diagnosis and solution with learning materials
-        
-        CLASSIFICATION APPROACH:
-        Analyze the user's INTENT, not just keywords. Consider:
-        - What is the user trying to accomplish?
-        - What type of help do they need?
-        - What would be most helpful given the context?
-        
-        ROUTING GUIDELINES:
-        
-        **Route to error_analysis when user:**
-        - Reports something not working or failing
-        - Shares error messages or problematic output
-        - Asks why a job failed or crashed
-        - Needs help debugging or troubleshooting
-        
-        **Route to custom_tool when user:**
-        - Wants to create or build a new tool
-        - Needs to wrap existing software for Galaxy
-        - Asks about tool development or customization
-        - Wants to convert commands into Galaxy tools
-        
-        **Route to dataset_analyzer when user:**
-        - Asks about data quality or validation
-        - Needs to understand dataset structure
-        - Has questions about data formats or conversion
-        - Wants to analyze or explore their data
-        
-        **Route to tool_recommendation when user:**
-        - Asks how to perform any analysis task
-        - Needs to find tools for specific operations
-        - Wants recommendations for data processing
-        - Asks "which tool" or "how to" questions about analysis
-        
-        **Route to gtn_training when user:**
-        - Asks for tutorials or training materials
-        - Wants to learn how to use Galaxy or specific tools  
-        - Needs step-by-step guides or examples
-        - Asks about learning paths or where to start
-        - Mentions being new to Galaxy or bioinformatics
-        - Expresses uncertainty about how to approach an analysis ("I don't know what to do")
-        - Needs guidance on getting started with a specific analysis type (RNA-seq, ChIP-seq, etc.)
-        - Asks for help understanding a scientific technique or workflow
-        - Wants to see examples of how others have done similar analyses
-        - **Has data and asks broad questions** like "What should I do?" or "How do I analyze this?"
-        - **Mentions having specific scientific data** (climate, genomic, proteomic, etc.) without clear direction
-        - **Shows uncertainty about analysis approach** for their data type or research domain
-        - **Asks general analysis questions** that would benefit from structured tutorials rather than specific tools
-        
-        **Route to orchestrator when user:**
-        - Has complex, multi-faceted problems requiring multiple types of expertise
-        - Reports errors AND needs alternative solutions AND wants to learn
-        - Asks comprehensive questions combining multiple domains (e.g., "My job failed, what tools should I use instead, and how do I learn to use them?")
-        - Needs both technical diagnosis and educational support
-        - Has queries that clearly benefit from coordinated specialist responses
-        - Asks for complete workflow guidance from problem to solution to learning
-        - **Examples that need orchestration**: "My RNA-seq analysis failed, help me fix it and show me how to do it properly"
-        - **NOT for orchestration**: Simple single-purpose queries that fit one specialist domain
-        
-        DIRECT RESPONSE GUIDELINES:
-        Only provide direct_response for:
-        - Simple greetings or pleasantries
-        - Questions about Galaxy platform itself (not analysis)
-        - Citation/reference requests (use the citation below)
-        - General help or documentation requests
-        
-        CITATION TEMPLATE:
-        For citation queries, use this direct_response:
-        "To cite Galaxy, please use: Nekrutenko, A., et al. (2024). The Galaxy platform for accessible, reproducible, and collaborative data analyses: 2024 update. Nucleic Acids Research. https://doi.org/10.1093/nar/gkae410
-        
-        For specific tools within Galaxy, please also cite the individual tool publications listed on their respective tool pages."
-        
-        OUTPUT REQUIREMENTS:
-        - Set primary_agent based on the main intent
-        - Add secondary_agents if multiple aspects are relevant
-        - Set complexity to "complex" for multi-faceted queries
-        - Provide clear reasoning explaining your classification
-        - Set confidence based on clarity of intent (not keyword matches)
-        
-        Remember: Focus on understanding what the user needs, not pattern matching keywords.
+        You are an expert Galaxy platform routing coordinator. Your job is to analyze a user's query and route it to the most appropriate specialist agent.
+        Pay close attention to the conversation history to understand the full context.
+
+        Focus on the user's *intent*.
+
+        - For errors, failures, or debugging, route to: **error_analysis**.
+        - For creating new tools or tool wrappers, route to: **custom_tool**.
+        - For finding tutorials, learning, or "how-to" questions, route to: **gtn_training**.
+        - For complex, multi-part queries (e.g., "fix my error AND find new tools AND show me a tutorial"), route to: **orchestrator**.
+        - For anything else related to finding or using tools, route to: **tool_recommendation**.
+
+        If the user is just making small talk or asking for a citation, provide a `direct_response`.
+        For citations, use this template:
+        "To cite Galaxy, please use: Nekrutenko, A., et al. (2024). The Galaxy platform for accessible, reproducible, and collaborative data analyses: 2024 update. Nucleic Acids Research. https://doi.org/10.1093/nar/gkae410"
         """
 
     async def route_query(self, query: str, context: Dict[str, Any] = None) -> RoutingDecision:
@@ -240,7 +100,7 @@ class QueryRouterAgent(BaseGalaxyAgent):
                 if history and len(history) > 0:
                     # Format conversation history for the model
                     history_text = "Previous conversation:\n"
-                    for msg in history[-6:]:  # Include last 6 messages for context
+                    for msg in history[-6:]:
                         role = msg.get("role", "unknown")
                         content = msg.get("content", "")
                         history_text += f"{role}: {content}\n"
@@ -277,315 +137,109 @@ class QueryRouterAgent(BaseGalaxyAgent):
         """Fallback routing when AI router fails - uses intent-based heuristics."""
         query_lower = query.lower()
 
-        # Priority 1: Direct responses for meta-queries
-        if any(phrase in query_lower for phrase in ["cite galaxy", "citation", "reference", "paper about galaxy"]):
-            return RoutingDecision(
-                primary_agent="router",
-                secondary_agents=[],
-                complexity="simple",
-                confidence="high",
-                reasoning="User asking about Galaxy citations",
-                direct_response="To cite Galaxy, please use: Nekrutenko, A., et al. (2024). The Galaxy platform for accessible, reproducible, and collaborative data analyses: 2024 update. Nucleic Acids Research. https://doi.org/10.1093/nar/gkae410\n\nFor specific tools within Galaxy, please also cite the individual tool publications listed on their respective tool pages.",
-            )
-
-        if any(word in query_lower for word in ["hello", "hi", "hey", "greetings"]):
-            return RoutingDecision(
-                primary_agent="router",
-                secondary_agents=[],
-                complexity="simple",
-                confidence="high",
-                reasoning="User greeting",
-                direct_response="Hello! I'm here to help you with Galaxy. What would you like to do today?",
-            )
-
-        # Priority 2: Analyze for error/debugging intent
-        error_indicators = ["error", "fail", "crash", "not work", "broken", "stderr", "exit code", "died", "killed"]
-        error_score = sum(1 for indicator in error_indicators if indicator in query_lower)
-
-        # Priority 3: Analyze for tool creation intent
-        creation_indicators = ["create", "build", "make", "wrap", "custom tool", "new tool", "yaml", "xml definition"]
-        creation_score = sum(1 for indicator in creation_indicators if indicator in query_lower)
-
-        # Priority 4: Analyze for data analysis intent
-        data_indicators = ["dataset", "data quality", "validate", "format", "analyze my", "check my", "examine"]
-        data_score = sum(1 for indicator in data_indicators if indicator in query_lower)
-
-        # Priority 5: Analyze for tool finding intent (most common)
-        tool_indicators = [
-            "which tool",
-            "what tool",
-            "how to",
-            "how do i",
-            "find tool",
-            "need to",
-            "want to",
-            "select",
-            "filter",
-            "process",
-            "convert",
-            "align",
-            "map",
-            "call variants",
-        ]
-        tool_score = sum(1 for indicator in tool_indicators if indicator in query_lower)
-
-        # Priority 6: Analyze for training/learning intent
-        training_indicators = [
-            "tutorial",
-            "learn",
-            "training",
-            "guide",
-            "example",
-            "how to use",
-            "teach",
-            "course",
-            "lesson",
-            "hands-on",
-            "hands on",
-            "step by step",
-            "walkthrough",
-            "getting started",
-            "beginner",
-            "new to",
-            "help me with",
-            "help me understand",
-            "show me",
-            "explain",
-            "don't know",
-            "not sure",
-            "confused",
-            "need help",
-        ]
-        training_score = sum(1 for indicator in training_indicators if indicator in query_lower)
-
-        # Special boost for "I don't know" type phrases indicating need for guidance
-        uncertainty_phrases = ["don't know what", "not sure what", "help me with", "need help with", "confused about"]
-        if any(phrase in query_lower for phrase in uncertainty_phrases):
-            training_score += 2  # Strong signal for needing tutorials/guidance
-
-        # Priority 6.5: Detect "I have data" scenarios that need tutorial guidance
-        data_analysis_patterns = [
-            "i have",
-            "i've got",
-            "my data",
-            "some data",
-            "data i need",
-            "data and",
-            "what should i do",
-            "what do i do",
-            "how do i analyze",
-            "how to analyze",
-            "where do i start",
-            "getting started with",
-            "first time",
-            "new to analyzing",
-        ]
-        data_guidance_score = sum(1 for pattern in data_analysis_patterns if pattern in query_lower)
-
-        # Scientific domain keywords that often need tutorial guidance
-        scientific_domains = [
-            "rna-seq",
-            "rna seq",
-            "rnaseq",
-            "dna-seq",
-            "dna seq",
-            "dnaseq",
-            "chip-seq",
-            "chip seq",
-            "chipseq",
-            "climate",
-            "environmental",
-            "ecology",
-            "genomic",
-            "genome",
-            "genetics",
-            "proteomic",
-            "protein",
-            "proteome",
-            "transcriptomic",
-            "transcriptome",
-            "metagenome",
-            "microbiome",
-            "variant",
-            "mutation",
-            "snp",
-            "phylogen",
-            "evolution",
-            "bioinformatic",
-            "computational biology",
-        ]
-        domain_score = sum(1 for domain in scientific_domains if domain in query_lower)
-
-        # Strong signal: user has data + scientific domain + uncertainty = needs tutorial
-        if data_guidance_score > 0 and (
-            domain_score > 0 or any(word in query_lower for word in ["analyze", "analysis", "data"])
-        ):
-            training_score += 3  # Very strong signal for GTN tutorials
-        elif data_guidance_score > 0:
-            training_score += 2  # Moderate signal for tutorials
-        elif domain_score > 0 and any(
-            word in query_lower for word in ["new to", "getting started", "first time", "beginner"]
-        ):
-            training_score += 2  # Domain-specific learning needs
-
-        # ORCHESTRATION DETECTION LOGIC
-        # =============================
-        # This section determines if a query is complex enough to require coordination
-        # between multiple agents. The orchestration system was tuned to be conservative
-        # after user feedback that it was "too proactive" and triggered unnecessarily.
-        #
-        # Key Design Principles:
-        # 1. Conservative by default - only orchestrate truly complex queries
-        # 2. Require explicit indicators of multi-part requests
-        # 3. High confidence thresholds to avoid false positives
-        # 4. Focus on user intent rather than just keyword matching
-
-        orchestration_score = 0
-
-        # STEP 1: Count domains with HIGH confidence (score >= 3)
-        # Only consider domains where we have strong confidence, not just weak signals.
-        # This prevents orchestration from triggering on queries that just happen to
-        # mention multiple topics in passing.
-        active_scores = [
-            ("error", error_score),
-            ("tool", tool_score),
-            ("training", training_score),
-            ("data", data_score),
-            ("creation", creation_score),
-        ]
-        high_scoring_domains = sum(1 for _, score in active_scores if score >= 3)  # Conservative threshold
-
-        # STEP 2: Look for EXPLICIT orchestration language
-        # These patterns indicate the user explicitly wants a multi-part response.
-        # We only orchestrate when the user clearly asks for it, not when we guess they might want it.
-        orchestration_indicators = [
-            # Conjunctive phrases that explicitly connect multiple requests
-            # Example: "Help me fix this error and also show me how to prevent it"
-            "and also",
-            "and then",
-            "plus also",
-            "also help me",
-            "also need to",
-            "as well as",
-            # Comprehensive request language that explicitly asks for complete solutions
-            # Example: "I need a complete workflow for RNA-seq analysis"
-            "complete workflow",
-            "full solution",
-            "entire process",
-            "comprehensive help",
-            # Problem-solving + learning patterns (explicit combination requests)
-            # Example: "Fix this error and teach me why it happened"
-            "fix.*and.*teach",
-            "solve.*and.*learn",
-            "help.*fix.*and.*show",
-            # Explicit multi-step process requests
-            # Example: "Walk me through the step by step workflow"
-            "step by step workflow",
-            "start to finish",
-            "beginning to end",
-        ]
-
-        # STEP 3: Check if query contains explicit orchestration language
-        import re
-
-        has_explicit_orchestration = any(re.search(indicator, query_lower) for indicator in orchestration_indicators)
-
-        # STEP 4: CONSERVATIVE ORCHESTRATION SCORING
-        # After user feedback that orchestration was "too proactive", we implemented
-        # much stricter criteria. Orchestration only triggers when we have high confidence
-        # that the user genuinely needs multiple agents working together.
-
-        # PRIMARY TRIGGER: 3+ high-confidence domains
-        # This means the query strongly indicates needs across at least 3 different specialties
-        # Example: Error troubleshooting + tool recommendation + training materials
-        if high_scoring_domains >= 3:
-            orchestration_score += high_scoring_domains  # Score scales with complexity
-
-        # SECONDARY TRIGGER: 2 high-confidence domains + explicit request
-        # User explicitly asks for multi-part help AND we detect 2+ strong domain signals
-        # Example: "Fix this error and also help me find alternative tools"
-        elif high_scoring_domains >= 2 and has_explicit_orchestration:
-            orchestration_score += 3  # Fixed boost for explicit multi-part requests
-
-        # BONUS: Additional points for explicit orchestration language
-        # Even if we don't hit the primary triggers, explicit requests get some consideration
-        if has_explicit_orchestration:
-            orchestration_score += 2
-
-        # STEP 5: SPECIALIZED ORCHESTRATION PATTERNS
-        # Certain combinations of domains are particularly well-suited for orchestration
-
-        # Pattern 1: Error + Learning + Tools (classic troubleshooting + education)
-        # Example: "This tool failed, help me fix it and show me how to use it properly"
-        if error_score >= 2 and training_score >= 2 and tool_score >= 1:
-            orchestration_score += 3
-
-        # Pattern 2: Error + Tools + Explicit request (problem-solving focus)
-        # Example: "My analysis failed and I need alternative tools to complete my workflow"
-        elif error_score >= 2 and tool_score >= 2 and has_explicit_orchestration:
-            orchestration_score += 2
-
-        # STEP 6: Query complexity bonus
-        # Very long queries often indicate complex, multi-faceted needs
-        # Threshold raised from 15 to 25 words to be more conservative
-        if len(query.split()) > 25:
-            orchestration_score += 1  # Small bonus for complex queries
-
-        # STEP 7: AGENT SELECTION
-        # All domain scores (including orchestration) compete to determine the best agent.
-        # The orchestrator is treated as just another specialist agent that happens to coordinate others.
-        scores = {
-            "error_analysis": (error_score, "User appears to be reporting an issue or error"),
-            "custom_tool": (creation_score, "User wants to create or customize a tool"),
-            "dataset_analyzer": (data_score, "User needs help with data analysis or validation"),
-            "tool_recommendation": (tool_score, "User needs help finding or using tools"),
-            "gtn_training": (training_score, "User wants training materials or tutorials"),
-            "orchestrator": (
-                orchestration_score,
-                "User has complex multi-faceted query requiring coordinated response",
+        # Define keyword sets for different intents
+        intent_keywords = {
+            "error_analysis": (
+                ["error", "fail", "crash", "not work", "broken", "stderr", "exit code", "died", "killed"],
+                1.0,  # Base score
+            ),
+            "custom_tool": (
+                ["create", "build", "make", "wrap", "custom tool", "new tool", "yaml", "xml definition"],
+                1.0,
+            ),
+            "tool_recommendation": (
+                [
+                    "which tool",
+                    "what tool",
+                    "how to",
+                    "how do i",
+                    "find tool",
+                    "need to",
+                    "want to",
+                    "select",
+                    "filter",
+                    "process",
+                    "convert",
+                    "align",
+                    "map",
+                    "call variants",
+                ],
+                0.5,  # Lower base score as it's a common fallback
+            ),
+            "gtn_training": (
+                [
+                    "tutorial",
+                    "learn",
+                    "training",
+                    "guide",
+                    "example",
+                    "how to use",
+                    "teach",
+                    "course",
+                    "lesson",
+                    "hands-on",
+                    "step by step",
+                    "walkthrough",
+                    "getting started",
+                    "beginner",
+                    "new to",
+                    "help me with",
+                    "help me understand",
+                    "show me",
+                    "explain",
+                    "don't know",
+                    "not sure",
+                    "confused",
+                    "need help",
+                ],
+                1.0,
             ),
         }
 
-        # Find the highest-scoring agent
-        # Default to tool_recommendation as it handles the most common case
-        best_agent = "tool_recommendation"
-        best_score = 0
-        reasoning = "Default routing to tool recommendation"
+        # Score each intent
+        scores = {intent: 0.0 for intent in intent_keywords}
+        for intent, (keywords, base_score) in intent_keywords.items():
+            if any(keyword in query_lower for keyword in keywords):
+                scores[intent] += base_score
 
-        for agent, (score, reason) in scores.items():
-            if score > best_score:
-                best_score = score
-                best_agent = agent
-                reasoning = reason
+        # Boost score for training/guidance intent based on specific patterns
+        if any(phrase in query_lower for phrase in ["don't know what", "not sure what", "help me with"]):
+            scores["gtn_training"] += 1.5  # Strong signal for needing guidance
 
-        # STEP 8: CONFIDENCE DETERMINATION
-        # Confidence reflects how certain we are about the routing decision
-        # Higher scores indicate stronger signal-to-noise ratio in the query
-        if best_score >= 2:
-            confidence = "high"  # Strong indicators present
-        elif best_score == 1:
-            confidence = "medium"  # Some indicators present
+        # Determine the winning agent
+        if not any(scores.values()):
+            # If no keywords matched, default to tool_recommendation
+            best_agent = "tool_recommendation"
+            reasoning = "No clear intent keywords found, defaulting to tool recommendation."
+            confidence = "low"
         else:
-            confidence = "low"  # No clear indicators, using default
-            reasoning = "No clear intent indicators found, defaulting to tool recommendation"
+            best_agent = max(scores, key=scores.get)
+            reasoning = f"Query contains keywords related to {best_agent.replace('_', ' ')}."
+            # Determine confidence based on score
+            if scores[best_agent] > 1.5:
+                confidence = "high"
+            elif scores[best_agent] > 0.5:
+                confidence = "medium"
+            else:
+                confidence = "low"
 
-        # Check for complexity (multiple intents)
-        active_intents = sum(1 for _, (score, _) in scores.items() if score > 0)
-        complexity = "complex" if active_intents > 1 else "simple"
+        # Simple direct responses for greetings or citations
+        if any(phrase in query_lower for phrase in ["cite galaxy", "citation", "reference"]):
+            return RoutingDecision(
+                primary_agent="router",
+                confidence="high",
+                reasoning="User is asking for citation information.",
+                direct_response="""To cite Galaxy, please use: Nekrutenko, A., et al. (2024). The Galaxy platform for accessible, reproducible, and collaborative data analyses: 2024 update. Nucleic Acids Research. https://doi.org/10.1093/nar/gkae410
 
-        # Add secondary agents if multiple intents detected
-        secondary_agents = []
-        if active_intents > 1:
-            for agent, (score, _) in scores.items():
-                if score > 0 and agent != best_agent:
-                    secondary_agents.append(agent)
+For specific tools, please also cite the individual tool publications.""",
+            )
 
         return RoutingDecision(
             primary_agent=best_agent,
-            secondary_agents=secondary_agents[:2],  # Limit to 2 secondary agents
-            complexity=complexity,
+            secondary_agents=[],
+            complexity="simple",  # Fallback is always simple
             confidence=confidence,
-            reasoning=f"Fallback routing: {reasoning}",
+            reasoning=reasoning,
             direct_response="",
         )
 

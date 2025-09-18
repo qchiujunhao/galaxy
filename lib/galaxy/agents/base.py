@@ -155,35 +155,19 @@ class BaseGalaxyAgent(ABC):
             return self._get_fallback_response(query, str(e))
 
     async def _run_with_retry(self, prompt: str, max_retries: int = 3, base_delay: float = 1.0):
-        """
-        Run the agent with exponential backoff retry logic.
-
-        Args:
-            prompt: The prompt to send to the agent
-            max_retries: Maximum number of retry attempts
-            base_delay: Base delay in seconds for exponential backoff
-
-        Returns:
-            Agent result
-
-        Raises:
-            Exception: If all retries are exhausted
-        """
+        """Run the agent, with exponential backoff for retries."""
         last_exception = None
 
         for attempt in range(max_retries + 1):
             try:
-                # Run the agent
-                result = await self.agent.run(prompt, deps=self.deps)
-
-                # If successful, return the result
-                return result
+                return await self.agent.run(prompt, deps=self.deps)
 
             except Exception as e:
                 last_exception = e
                 error_msg = str(e).lower()
 
-                # Check if this is a retryable error
+                # A fairly generic list of retryable network errors.
+                # TODO: Make this more specific to the underlying provider's exceptions.
                 is_retryable = any(
                     indicator in error_msg
                     for indicator in [
@@ -202,7 +186,6 @@ class BaseGalaxyAgent(ABC):
                 )
 
                 if not is_retryable or attempt == max_retries:
-                    # Don't retry for non-retryable errors or if we've exhausted retries
                     raise e
 
                 # Calculate exponential backoff delay
@@ -249,12 +232,8 @@ class BaseGalaxyAgent(ABC):
         )
 
     def _get_fallback_response(self, query: str, error_msg: str) -> AgentResponse:
-        """Return a fallback response when agent processing fails.
-
-        This should indicate service unavailability rather than pretending
-        to have analyzed the query.
-        """
-        # Check if this is likely a service/connectivity issue
+        """Return a fallback response when agent processing fails."""
+        # Check for common service connectivity issues to provide a better message.
         is_service_error = any(
             indicator in error_msg.lower()
             for indicator in ["connection", "timeout", "api", "401", "403", "500", "502", "503", "rate limit"]
