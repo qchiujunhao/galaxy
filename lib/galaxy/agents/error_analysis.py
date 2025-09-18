@@ -1,36 +1,5 @@
 """
 Error analysis agent for enhanced tool error diagnosis.
-
-WHAT THIS AGENT DOES:
-- Analyzes Galaxy job failures and provides actionable debugging guidance
-- Examines stderr, stdout, exit codes, and tool parameters
-- Identifies common error patterns and suggests fixes
-- Provides step-by-step troubleshooting recommendations
-- Helps users understand why their Galaxy jobs failed
-
-CURRENT CAPABILITIES:
-- Parses error messages from various bioinformatics tools
-- Identifies memory issues, file format problems, parameter errors
-- Provides structured error analysis with confidence levels
-- Suggests specific actions to resolve issues
-- Handles both simple and complex error scenarios
-
-KNOWN ISSUES:
-- Limited to pattern matching, no deep semantic understanding
-- Can't access actual job files or datasets for validation
-- No integration with Galaxy's job metrics or resource usage
-- Generic suggestions for unfamiliar error patterns
-- No learning from resolved issues
-
-PLANNED IMPROVEMENTS:
-- Add ML-based error classification for better pattern recognition
-- Integrate with Galaxy job metrics API for resource analysis
-- Build knowledge base of tool-specific error patterns
-- Add ability to suggest alternative tools for failed operations
-- Implement automated fix suggestions with code/parameter changes
-- Add historical analysis ("this error happens often with this tool")
-- Connect to tool documentation for version-specific issues
-- Add predictive warnings before job submission
 """
 
 import logging
@@ -109,31 +78,12 @@ class ErrorAnalysisAgent(BaseGalaxyAgent):
         """Get the system prompt for error analysis."""
         return """
         You are a Galaxy Project expert specializing in diagnosing tool errors and job failures.
-        Your goal is to help users understand errors and provide actionable solutions.
-        
-        When analyzing errors:
-        1. Categorize the error type and severity
-        2. Identify the most likely cause based on error messages, exit codes, and context
-        3. Provide clear, step-by-step solutions
-        4. Suggest alternative approaches when applicable
-        5. Reference relevant documentation when helpful
-        6. Indicate if admin intervention is required
-        
-        Error categories to consider:
-        - tool_configuration: Missing dependencies, incorrect tool setup
-        - input_data: Invalid formats, corrupted files, missing data
-        - parameters: Incorrect parameter values or combinations
-        - resources: Memory, disk space, or compute limitations
-        - system: Galaxy server issues, permissions, infrastructure
-        - network: Download failures, connectivity issues
-        
-        Always provide practical, actionable advice. Be confident in your analysis
-        when you have clear indicators, but acknowledge uncertainty when appropriate.
-        
-        AVAILABLE TOOLS:
-        - get_alternative_tools: When you identify a tool failure, use this to find alternative tools that can accomplish the same task
-        
-        Use these tools when they would provide value to the user's specific situation.
+        Your goal is to help users understand why their job failed and provide a clear, actionable solution.
+
+        - Based on the error messages and job context, determine the likely cause.
+        - Provide a step-by-step solution to fix the problem.
+        - If the tool itself seems to be the issue, use the `get_alternative_tools` tool to suggest other options.
+        - Be practical and confident in your analysis, but acknowledge uncertainty when the cause is not clear.
         """
 
     async def get_job_details(self, job_id: int) -> Dict[str, Any]:
