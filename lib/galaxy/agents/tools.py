@@ -1,40 +1,5 @@
 """
 Tool recommendation agent for suggesting appropriate Galaxy tools.
-
-WHAT THIS AGENT DOES:
-- Recommends appropriate Galaxy tools based on user's analysis needs
-- Searches and filters tools by category, format compatibility, and task type
-- Provides parameter guidance and workflow suggestions
-- Helps users discover tools they may not know about
-- Suggests tool combinations for multi-step analyses
-
-CURRENT CAPABILITIES:
-- Mock tool database with common bioinformatics tools
-- Keyword-based search with task mapping
-- Format compatibility checking
-- Tool categorization (NGS, RNA-seq, variant calling, etc.)
-- Basic parameter recommendations
-- Alternative tool suggestions
-
-KNOWN ISSUES:
-- Uses mock data instead of real Galaxy toolbox integration
-- No actual tool availability checking
-- Limited to predefined tool categories
-- No version compatibility checks
-- Can't access actual tool performance metrics
-- No user preference learning
-
-PLANNED IMPROVEMENTS:
-- Integrate with real Galaxy toolshed API
-- Add dynamic tool discovery from server toolbox
-- Implement tool popularity/usage statistics
-- Add workflow template recommendations
-- Include tool performance benchmarks
-- Learn from user's tool usage patterns
-- Add support for tool version requirements
-- Implement format conversion chain suggestions
-- Add resource requirement estimates
-- Include community ratings and reviews
 """
 
 import logging
@@ -121,43 +86,11 @@ class ToolRecommendationAgent(BaseGalaxyAgent):
         """Get the system prompt for tool recommendation."""
         return """
         You are a Galaxy Project expert specializing in tool discovery and recommendation.
-        Your goal is to help users find the right tools for their bioinformatics tasks.
-        
-        When recommending tools:
-        1. Understand the user's task requirements and data types
-        2. Search for relevant tools based on keywords and categories
-        3. Evaluate tool compatibility with input/output formats
-        4. Rank tools by relevance and appropriateness
-        5. Provide clear explanations for recommendations
-        6. Suggest parameter settings when appropriate
-        7. Recommend tool combinations or workflows for complex tasks
-        
-        Tool categories to consider:
-        - Text Manipulation: grep, sed, awk, cut, sort, join
-        - NGS: Mapping (BWA, Bowtie2), Assembly, Quality Control (FastQC, MultiQC)
-        - Variant Calling: GATK, FreeBayes, VarScan, bcftools
-        - RNA-seq: HISAT2, StringTie, DESeq2, featureCounts, Salmon
-        - ChIP-seq: MACS2, HOMER, deepTools
-        - Genome Annotation: Prokka, MAKER, Augustus
-        - Phylogenetics: RAxML, IQ-TREE, MEGA
-        - Proteomics: MaxQuant, MSGFPlus, PeptideShaker
-        - Visualization: IGV, JBrowse, Circos
-        - File Conversion: Format converters, UCSC tools
-        - Statistics: R packages, Python libraries
-        
-        Consider these factors:
-        - Input data format and size
-        - Computational requirements
-        - Tool popularity and maintenance status
-        - Documentation quality
-        - Compatibility with Galaxy workflows
-        
-        Always provide practical recommendations with clear reasoning.
-        
-        AVAILABLE TOOLS:
-        - get_training_materials: When users need learning materials or show learning intent, use this to find relevant tutorials and training resources for the recommended tools
-        
-        Use this tool when users show learning intent (asking for tutorials, guides, examples) or would benefit from training materials.
+        Your goal is to help users find the right tools for their bioinformatics tasks by providing practical recommendations with clear reasoning.
+
+        - Understand the user's task and data types.
+        - Recommend specific, relevant Galaxy tools.
+        - If the user shows learning intent (e.g., asks for tutorials, guides, or examples), use the `get_training_materials` tool to find relevant training resources for the recommended tools.
         """
 
     async def search_tools(self, query: str, category: Optional[str] = None) -> List[Dict[str, Any]]:
