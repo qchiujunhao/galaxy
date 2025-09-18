@@ -339,7 +339,7 @@ module.exports = (env = {}, argv = {}) => {
                     port: process.env.GITPOD_WORKSPACE_ID ? 443 : undefined,
                 },
             },
-            allowedHosts: process.env.GITPOD_WORKSPACE_ID ? "all" : "auto",
+            allowedHosts: process.env.WEBPACK_ALLOWED_HOSTS || (process.env.GITPOD_WORKSPACE_ID ? "all" : "auto"),
             devMiddleware: {
                 publicPath: "/static/dist",
                 writeToDisk: true,
