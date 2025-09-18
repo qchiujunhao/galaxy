@@ -17,11 +17,9 @@ from fastapi import (
     Path,
     Query,
 )
-from pydantic import Field
 
 from galaxy.config import GalaxyAppConfiguration
 from galaxy.exceptions import ConfigurationError
-from galaxy.managers.agents import AgentService
 from galaxy.managers.chat import ChatManager
 from galaxy.managers.context import ProvidesUserContext
 from galaxy.managers.jobs import JobManager
@@ -30,9 +28,7 @@ from galaxy.schema.agents import (
     AgentListResponse,
     AgentQueryRequest,
     AgentQueryResponse,
-    AgentResponse,
     AvailableAgent,
-    ConfidenceLevel,
 )
 from galaxy.schema.fields import DecodedDatabaseIdField
 from galaxy.schema.schema import (
@@ -91,13 +87,11 @@ DEFAULT_PROMPT = """
 Please only say that something went wrong when configuing the ai prompt in your response.
 """
 
-JobIdQueryParam = Annotated[
-    Optional[DecodedDatabaseIdField],
-    Field(default=None, title="Job ID", description="The Job ID the chat exchange is linked to."),
-]
-JobIdPathParam = Annotated[
-    DecodedDatabaseIdField,
-    Path(title="Job ID", description="The Job ID the chat exchange is linked to."),
+JobIdPathParam = Optional[
+    Annotated[
+        DecodedDatabaseIdField,
+        Path(title="Job ID", description="The Job ID the chat exchange is linked to."),
+    ]
 ]
 
 
@@ -106,7 +100,19 @@ class ChatAPI:
     config: GalaxyAppConfiguration = depends(GalaxyAppConfiguration)
     chat_manager: ChatManager = depends(ChatManager)
     job_manager: JobManager = depends(JobManager)
-    agent_service: AgentService = depends(AgentService)
+
+    def _create_agent_dependencies(self, trans: ProvidesUserContext, user: User) -> GalaxyAgentDependencies:
+        """Create agent dependencies for dependency injection."""
+        if not HAS_AGENTS:
+            raise ConfigurationError("Agent system is not available")
+
+        return GalaxyAgentDependencies(
+            trans=trans,
+            user=user,
+            config=self.config,
+            job_manager=self.job_manager,
+            # Add other managers as needed
+        )
 
     @router.post("/api/chat")
     async def query(
@@ -498,6 +504,8 @@ class ChatAPI:
         context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Get full agent response with metadata and suggestions."""
+        deps = self._create_agent_dependencies(trans, user)
+
         # Prepare context - merge passed context with job context
         if context is None:
             context = {}
@@ -506,14 +514,69 @@ class ChatAPI:
             context["tool_id"] = job.tool_id
             context["state"] = job.state
 
-        # Use agent service for routing and execution
-        return await self.agent_service.route_and_execute(
-            query=query,
-            trans=trans,
-            user=user,
-            context=context,
-            agent_type=agent_type,
-        )
+        # Route to appropriate agent
+        actual_agent_type = agent_type
+        routing_reasoning = None
+
+        if agent_type == "auto":
+            # Use router agent to determine best agent
+            log.info(f"Router: Analyzing query for intent classification: '{query[:100]}...'")
+            router = QueryRouterAgent(deps)
+            routing_decision = await router.route_query(query, context)
+
+            if routing_decision.direct_response:
+                log.info("Router: Handling with direct response (no agent needed)")
+                return {
+                    "content": routing_decision.direct_response,
+                    "agent_type": "router",
+                    "confidence": routing_decision.confidence,
+                    "suggestions": [],
+                    "metadata": {"handled_directly": True},
+                }
+
+            # Use the primary agent recommended by router
+            actual_agent_type = routing_decision.primary_agent
+            routing_reasoning = routing_decision.reasoning
+            log.info(f"Router: Selected agent '{actual_agent_type}' - Reason: {routing_reasoning}")
+            if routing_decision.secondary_agents:
+                log.info(f"Router: Secondary agents that could help: {routing_decision.secondary_agents}")
+        else:
+            log.info(f"User explicitly requested agent: {actual_agent_type}")
+
+        # Get the specific agent
+        try:
+            log.info(f"Invoking {actual_agent_type} agent to process query")
+            agent = agent_registry.get_agent(actual_agent_type, deps)
+            response = await agent.process(query, context)
+
+            # Convert AgentResponse to dict
+            result = {
+                "content": response.content,
+                "agent_type": response.agent_type,
+                "confidence": response.confidence,
+                "suggestions": [s.model_dump() for s in response.suggestions],
+                "metadata": response.metadata,
+                "reasoning": response.reasoning,
+            }
+
+            # Add routing information if we used the router
+            if routing_reasoning:
+                result["routing_info"] = {"selected_agent": actual_agent_type, "reasoning": routing_reasoning}
+
+            return result
+        except ValueError as e:
+            # Unknown agent type, fallback to error analysis
+            log.warning(f"Unknown agent type {actual_agent_type}, falling back to error_analysis: {e}")
+            agent = ErrorAnalysisAgent(deps)
+            response = await agent.process(query, context)
+            return {
+                "content": response.content,
+                "agent_type": response.agent_type,
+                "confidence": response.confidence,
+                "suggestions": [s.model_dump() for s in response.suggestions],
+                "metadata": response.metadata,
+                "reasoning": response.reasoning,
+            }
 
     @router.get("/api/ai/agents")
     def list_agents(
@@ -562,26 +625,25 @@ class ChatAPI:
         start_time = time.time()
 
         try:
-            # Get full agent response with all metadata and routing info
-            result = await self._get_agent_response_full(request.query, request.agent_type, trans, user)
+            response_content = await self._get_agent_response(request.query, request.agent_type, trans, user)
 
-            # Create agent response object using schema version
+            # Create agent response object
+            from galaxy.agents.base import (
+                AgentResponse,
+                ConfidenceLevel,
+            )
+
             agent_response = AgentResponse(
-                content=result["content"],
-                confidence=result.get("confidence", ConfidenceLevel.MEDIUM),
-                agent_type=result.get("agent_type", request.agent_type),
-                suggestions=result.get("suggestions", []),
-                metadata=result.get("metadata", {}),
-                reasoning=result.get("reasoning"),
+                content=response_content,
+                confidence=ConfidenceLevel.MEDIUM,
+                agent_type=request.agent_type,
+                suggestions=[],
+                metadata={},
             )
 
             processing_time = time.time() - start_time
 
-            return AgentQueryResponse(
-                response=agent_response,
-                routing_info=result.get("routing_info"),
-                processing_time=processing_time,
-            )
+            return AgentQueryResponse(response=agent_response, processing_time=processing_time)
 
         except Exception as e:
             log.error(f"Error in agent query: {e}")
@@ -611,6 +673,11 @@ class ChatAPI:
         if not HAS_AGENTS:
             raise ConfigurationError("Agent system is not available")
 
+        from galaxy.agents.tools import ToolRecommendationAgent
+
+        deps = self._create_agent_dependencies(trans, user)
+        agent = ToolRecommendationAgent(deps)
+
         # Build context
         context = {}
         if input_format:
@@ -619,20 +686,14 @@ class ChatAPI:
             context["output_format"] = output_format
 
         try:
-            response = await self.agent_service.execute_agent(
-                agent_type="tool_recommendation",
-                query=query,
-                trans=trans,
-                user=user,
-                context=context,
-            )
+            response = await agent.process(query, context)
 
             # Return structured response
             return {
-                "recommendations": response["content"],
-                "confidence": response["confidence"],
-                "suggestions": response["suggestions"],
-                "metadata": response.get("metadata", {}),
+                "recommendations": response.content,
+                "confidence": response.confidence,
+                "suggestions": [s.model_dump() for s in response.suggestions],
+                "metadata": response.metadata,
             }
         except Exception as e:
             log.error(f"Tool recommendation failed: {e}")
