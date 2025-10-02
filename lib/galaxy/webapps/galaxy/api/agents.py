@@ -14,7 +14,9 @@ from fastapi import (
 
 from galaxy.exceptions import ConfigurationError
 from galaxy.managers.agents import AgentService
+from galaxy.managers.chat import ChatManager
 from galaxy.managers.context import ProvidesUserContext
+from galaxy.managers.jobs import JobManager
 from galaxy.model import User
 from galaxy.schema.agents import (
     AgentQueryRequest,
@@ -37,6 +39,8 @@ class DirectAgentAPI:
     """Direct agent access endpoints. Shares logic with chat through AgentService."""
 
     agent_service: AgentService = depends(AgentService)
+    chat_manager: ChatManager = depends(ChatManager)
+    job_manager: JobManager = depends(JobManager)
 
     @router.post("/api/agents/custom-tool")
     async def create_custom_tool(
@@ -117,6 +121,17 @@ class DirectAgentAPI:
                 user=user,
                 context=context,
             )
+
+            # Save chat exchange for job-based error analysis (enables feedback)
+            if job_id:
+                job = self.job_manager.get_accessible_job(trans, job_id)
+                if job:
+                    # Check if exchange already exists
+                    existing = self.chat_manager.get(trans, job.id)
+                    if not existing:
+                        # Create new exchange for feedback tracking
+                        exchange = self.chat_manager.create(trans, job.id, response["content"])
+                        response["exchange_id"] = exchange.id
 
             return response
 
