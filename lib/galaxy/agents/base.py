@@ -158,9 +158,15 @@ class BaseGalaxyAgent(ABC):
         """Run the agent, with exponential backoff for retries."""
         last_exception = None
 
+        # Get model settings from config
+        model_settings = {
+            "temperature": self._get_temperature(),
+            "max_tokens": self._get_max_tokens(),
+        }
+
         for attempt in range(max_retries + 1):
             try:
-                return await self.agent.run(prompt, deps=self.deps)
+                return await self.agent.run(prompt, deps=self.deps, model_settings=model_settings)
 
             except Exception as e:
                 last_exception = e
@@ -265,7 +271,7 @@ class BaseGalaxyAgent(ABC):
 
     def _supports_structured_output(self) -> bool:
         """Check if current model supports structured output (tool calling/JSON mode)."""
-        model_name = (self.deps.config.ai_model or "").lower()
+        model_name = self._get_agent_config("model", "").lower()
 
         # DeepSeek models don't support structured output at all
         if "deepseek" in model_name:
@@ -278,23 +284,60 @@ class BaseGalaxyAgent(ABC):
         # Default to attempting structured output for unknown models
         return True
 
+    def _get_agent_config(self, key: str, default: Any = None) -> Any:
+        """
+        Get configuration value for this agent with fallback logic.
+
+        Precedence:
+        1. Agent-specific config (e.g., inference_services.custom_tool.model)
+        2. Default inference config (inference_services.default.model)
+        3. Global config (ai_model for 'model' key)
+        4. Provided default value
+        """
+        inference_config = getattr(self.deps.config, "inference_services", {})
+
+        # 1. Check agent-specific config
+        if isinstance(inference_config, dict):
+            agent_specific = inference_config.get(self.agent_type, {})
+            if isinstance(agent_specific, dict) and key in agent_specific:
+                return agent_specific[key]
+
+            # 2. Check default inference config
+            default_config = inference_config.get("default", {})
+            if isinstance(default_config, dict) and key in default_config:
+                return default_config[key]
+
+        # 3. Check global config for specific keys
+        if key == "model":
+            if hasattr(self.deps.config, "ai_model") and self.deps.config.ai_model:
+                return self.deps.config.ai_model
+        elif key == "api_key":
+            if hasattr(self.deps.config, "ai_api_key") and self.deps.config.ai_api_key:
+                return self.deps.config.ai_api_key
+        elif key == "api_base_url":
+            if hasattr(self.deps.config, "ai_api_base_url") and self.deps.config.ai_api_base_url:
+                return self.deps.config.ai_api_base_url
+
+        # 4. Return provided default
+        return default
+
     def _get_model_name(self) -> str:
         """Get the model name for this agent from configuration."""
-        # Check for global AI model configuration first
-        if hasattr(self.deps.config, "ai_model") and self.deps.config.ai_model:
-            # Use the global AI model configuration
-            return f"openai:{self.deps.config.ai_model}"
+        model = self._get_agent_config("model", "gpt-4o-mini")
 
-        # Fall back to agent-specific configuration
-        agent_config = getattr(self.deps.config, "agents", {}).get(self.agent_type, {})
-        return agent_config.get("model", "openai:gpt-3.5-turbo")
+        # Ensure it has the openai: prefix for pydantic-ai
+        if not model.startswith("openai:"):
+            return f"openai:{model}"
+        return model
 
     def _get_model(self):
         """Get the configured model with proper base URL."""
         model_name = self._get_model_name()
+        api_key = self._get_agent_config("api_key")
+        base_url = self._get_agent_config("api_base_url")
 
         # Check if we need to use a custom base URL
-        if hasattr(self.deps.config, "ai_api_base_url") and self.deps.config.ai_api_base_url:
+        if base_url:
             if HAS_PYDANTIC_AI and OpenAIChatModel:
                 # Remove the "openai:" prefix if present
                 if model_name.startswith("openai:"):
@@ -302,27 +345,25 @@ class BaseGalaxyAgent(ABC):
 
                 # Create a custom OpenAIProvider with the configured base URL
                 custom_provider = OpenAIProvider(
-                    api_key=self.deps.config.ai_api_key or "sk-local-test-master-key",
-                    base_url=self.deps.config.ai_api_base_url,
+                    api_key=api_key or "sk-local-test-master-key",
+                    base_url=base_url,
                 )
                 # Return the OpenAIChatModel with custom provider
                 return OpenAIChatModel(model_name, provider=custom_provider)
 
         # Default case - use standard OpenAI configuration
-        if self.deps.config.ai_api_key:
-            os.environ["OPENAI_API_KEY"] = self.deps.config.ai_api_key
+        if api_key:
+            os.environ["OPENAI_API_KEY"] = api_key
 
         return model_name
 
     def _get_temperature(self) -> float:
         """Get the temperature setting for this agent."""
-        agent_config = getattr(self.deps.config, "agents", {}).get(self.agent_type, {})
-        return agent_config.get("temperature", 0.7)
+        return self._get_agent_config("temperature", 0.7)
 
     def _get_max_tokens(self) -> int:
         """Get the max tokens setting for this agent."""
-        agent_config = getattr(self.deps.config, "agents", {}).get(self.agent_type, {})
-        return agent_config.get("max_tokens", 1500)
+        return self._get_agent_config("max_tokens", 2000)
 
     async def _call_agent_from_tool(self, agent_type: str, query: str, ctx, usage=None) -> str:
         """
@@ -357,9 +398,18 @@ class BaseGalaxyAgent(ABC):
             # Get the target agent
             target_agent = agent_registry.get_agent(agent_type, ctx.deps)
 
-            # Call the agent with proper usage tracking
+            # Get model settings for the target agent
+            target_model_settings = {
+                "temperature": target_agent._get_temperature(),
+                "max_tokens": target_agent._get_max_tokens(),
+            }
+
+            # Call the agent with proper usage tracking and model settings
             result = await target_agent.agent.run(
-                query, deps=ctx.deps, usage=usage or ctx.usage  # Use provided usage or fall back to ctx.usage
+                query,
+                deps=ctx.deps,
+                usage=usage or ctx.usage,  # Use provided usage or fall back to ctx.usage
+                model_settings=target_model_settings,
             )
 
             # Extract response data
