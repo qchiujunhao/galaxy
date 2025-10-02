@@ -5506,9 +5506,26 @@
 ~~~~~~~~~~~~
 
 :Description:
-    AI model to enable the wizard.
+    AI model to enable the wizard. Global fallback for all AI agents.
 :Default: ``gpt-4o``
 :Type: str
+
+
+~~~~~~~~~~~~~~~~~~~~~~
+``inference_services``
+~~~~~~~~~~~~~~~~~~~~~~
+
+:Description:
+    Configuration for AI inference services used by agents. Supports
+    per-agent model, temperature, and token settings. Agents inherit
+    from 'default' configuration, which itself falls back to global
+    ai_model/ai_api_key settings.
+    Example:   inference_services:     default:       model:
+    gpt-4o-mini       temperature: 0.7       max_tokens: 2000
+    custom_tool:       model: gpt-4o       temperature: 0.3
+    orchestrator:       model: gpt-4o       max_tokens: 4000
+:Default: ``None``
+:Type: any
 
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
