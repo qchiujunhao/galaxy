@@ -5,6 +5,7 @@ Base classes for Galaxy AI agents.
 import asyncio
 import logging
 import os
+import re
 import time
 from abc import (
     ABC,
@@ -106,7 +107,12 @@ class BaseGalaxyAgent(ABC):
     def __init__(self, deps: GalaxyAgentDependencies):
         """Initialize the agent with dependencies."""
         self.deps = deps
-        self.agent_type = self.__class__.__name__.lower().replace("agent", "")
+        # Convert PascalCase to snake_case: CustomToolAgent -> custom_tool_agent -> custom_tool
+        # Handle acronyms: GTNTrainingAgent -> gtn_training_agent -> gtn_training
+        class_name = self.__class__.__name__
+        # Insert underscore before uppercase letters that follow lowercase or are followed by lowercase
+        snake_case = re.sub(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "_", class_name).lower()
+        self.agent_type = snake_case.replace("_agent", "").replace("agent", "")
 
         if not HAS_PYDANTIC_AI:
             raise ImportError(
