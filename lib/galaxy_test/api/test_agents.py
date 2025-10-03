@@ -259,6 +259,44 @@ class TestAgentUnitMocked:
             job_manager=None,
         )
 
+    def test_agent_config_fallback_chain(self):
+        """Test per-agent configuration with fallback logic."""
+        # Set up mock config with inference_services
+        self.mock_config.inference_services = {
+            "default": {
+                "model": "gpt-4o-mini",
+                "temperature": 0.7,
+                "max_tokens": 2000,
+            },
+            "custom_tool": {
+                "model": "claude-sonnet-4-5",
+                "temperature": 0.3,
+                "max_tokens": 3000,
+            },
+        }
+
+        # Test agent with specific config
+        custom_tool_agent = CustomToolAgent(self.deps)
+        assert custom_tool_agent._get_agent_config("model") == "claude-sonnet-4-5"
+        assert custom_tool_agent._get_agent_config("temperature") == 0.3
+        assert custom_tool_agent._get_agent_config("max_tokens") == 3000
+
+        # Test agent that falls back to default
+        error_agent = ErrorAnalysisAgent(self.deps)
+        assert error_agent._get_agent_config("model") == "gpt-4o-mini"
+        assert error_agent._get_agent_config("temperature") == 0.7
+        assert error_agent._get_agent_config("max_tokens") == 2000
+
+        # Test fallback to global config when inference_services not set
+        self.mock_config.inference_services = None
+        router_agent = QueryRouterAgent(self.deps)
+        assert router_agent._get_agent_config("model") == "llama-4-scout"  # From ai_model
+        assert router_agent._get_agent_config("api_key") == "test-key"  # From ai_api_key
+
+        # Test custom default value
+        assert router_agent._get_agent_config("temperature", 0.5) == 0.5
+        assert router_agent._get_agent_config("max_tokens", 1500) == 1500
+
     @pytest.mark.asyncio
     async def test_router_agent_routing_decisions(self):
         """Test that router agent makes correct routing decisions."""
