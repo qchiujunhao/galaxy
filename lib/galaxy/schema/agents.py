@@ -32,6 +32,10 @@ class ActionType(str, Enum):
     WORKFLOW_STEP = "workflow_step"
     DOCUMENTATION = "documentation"
     CONTACT_SUPPORT = "contact_support"
+    VIEW_EXTERNAL = "view_external"  # Open external URL in new tab
+    SAVE_TOOL = "save_tool"
+    TEST_TOOL = "test_tool"
+    REFINE_QUERY = "refine_query"
 
 
 class ActionSuggestion(BaseModel):
