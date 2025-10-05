@@ -29,7 +29,9 @@ from galaxy.schema.agents import (
     AgentListResponse,
     AgentQueryRequest,
     AgentQueryResponse,
+    AgentResponse,
     AvailableAgent,
+    ConfidenceLevel,
 )
 from galaxy.schema.fields import DecodedDatabaseIdField
 from galaxy.schema.schema import (
@@ -557,25 +559,26 @@ class ChatAPI:
         start_time = time.time()
 
         try:
-            response_content = await self._get_agent_response(request.query, request.agent_type, trans, user)
+            # Get full agent response with all metadata and routing info
+            result = await self._get_agent_response_full(request.query, request.agent_type, trans, user)
 
-            # Create agent response object
-            from galaxy.agents.base import (
-                AgentResponse,
-                ConfidenceLevel,
-            )
-
+            # Create agent response object using schema version
             agent_response = AgentResponse(
-                content=response_content,
-                confidence=ConfidenceLevel.MEDIUM,
-                agent_type=request.agent_type,
-                suggestions=[],
-                metadata={},
+                content=result["content"],
+                confidence=result.get("confidence", ConfidenceLevel.MEDIUM),
+                agent_type=result.get("agent_type", request.agent_type),
+                suggestions=result.get("suggestions", []),
+                metadata=result.get("metadata", {}),
+                reasoning=result.get("reasoning"),
             )
 
             processing_time = time.time() - start_time
 
-            return AgentQueryResponse(response=agent_response, processing_time=processing_time)
+            return AgentQueryResponse(
+                response=agent_response,
+                routing_info=result.get("routing_info"),
+                processing_time=processing_time,
+            )
 
         except Exception as e:
             log.error(f"Error in agent query: {e}")
