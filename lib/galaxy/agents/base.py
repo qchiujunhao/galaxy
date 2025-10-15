@@ -30,16 +30,21 @@ from galaxy.model import User
 try:
     from pydantic_ai import Agent
     from pydantic_ai.exceptions import UnexpectedModelBehavior
-    from pydantic_ai.models.openai import OpenAIChatModel
+    try:  # pydantic-ai renamed OpenAIModel in newer versions
+        from pydantic_ai.models.openai import OpenAIModel as _OpenAIModel
+    except ImportError:  # pragma: no cover - compatibility shim
+        from pydantic_ai.models.openai import OpenAIModel as _OpenAIModel
     from pydantic_ai.providers.openai import OpenAIProvider
 
+    OpenAIModel = _OpenAIModel
     HAS_PYDANTIC_AI = True
-except ImportError:
+except ImportError as exc:  # pragma: no cover - library missing
     HAS_PYDANTIC_AI = False
     Agent = None
     UnexpectedModelBehavior = Exception
-    OpenAIChatModel = None
+    OpenAIModel = None
     OpenAIProvider = None
+    logging.getLogger(__name__).warning("Failed to import pydantic_ai components: %s", exc)
 
 log = logging.getLogger(__name__)
 
@@ -64,6 +69,7 @@ class ActionType(str, Enum):
     SAVE_TOOL = "save_tool"
     TEST_TOOL = "test_tool"
     REFINE_QUERY = "refine_query"
+    PYODIDE_EXECUTE = "pyodide_execute"
 
 
 class ActionSuggestion(BaseModel):
@@ -87,6 +93,37 @@ class AgentResponse(BaseModel):
     reasoning: Optional[str] = None
 
 
+class Artifact(BaseModel):
+    """Artifact produced by executing generated code."""
+
+    name: str
+    mime_type: str
+    size: int
+    content_base64: Optional[str] = None
+    temp_path: Optional[str] = None
+
+
+class ExecutionTask(BaseModel):
+    """Description of work to execute in a sandbox (e.g., Pyodide)."""
+
+    code: str
+    requirements: List[str] = []
+    inputs: Dict[str, Any] = {}
+    timeout_seconds: int = 120
+    task_id: Optional[str] = None
+
+
+class ExecutionResult(BaseModel):
+    """Result returned from executing an `ExecutionTask`."""
+
+    task_id: Optional[str] = None
+    stdout: str = ""
+    stderr: str = ""
+    artifacts: List[Artifact] = []
+    metadata: Dict[str, Any] = {}
+    success: bool = True
+
+
 @dataclass
 class GalaxyAgentDependencies:
     """Dependencies passed to Galaxy agents via dependency injection."""
@@ -104,6 +141,8 @@ class GalaxyAgentDependencies:
 class BaseGalaxyAgent(ABC):
     """Base class for all Galaxy AI agents."""
 
+    USE_PYDANTIC_AGENT: bool = True
+
     def __init__(self, deps: GalaxyAgentDependencies):
         """Initialize the agent with dependencies."""
         self.deps = deps
@@ -114,12 +153,13 @@ class BaseGalaxyAgent(ABC):
         snake_case = re.sub(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "_", class_name).lower()
         self.agent_type = snake_case.replace("_agent", "").replace("agent", "")
 
-        if not HAS_PYDANTIC_AI:
-            raise ImportError(
-                "pydantic-ai is required for agent functionality. " "Please install with: pip install pydantic-ai"
-            )
+        if self.USE_PYDANTIC_AGENT:
+            if not HAS_PYDANTIC_AI:
+                raise ImportError(
+                    "pydantic-ai is required for agent functionality. " "Please install with: pip install pydantic-ai"
+                )
 
-        self.agent = self._create_agent()
+            self.agent = self._create_agent()
 
     @abstractmethod
     def _create_agent(self) -> Agent:
@@ -142,6 +182,11 @@ class BaseGalaxyAgent(ABC):
         Returns:
             AgentResponse with structured output
         """
+        if not self.USE_PYDANTIC_AGENT:
+            raise NotImplementedError(
+                "Agents that disable the pydantic runtime must override `process`."
+            )
+
         try:
             # Prepare the full prompt with context
             full_prompt = self._prepare_prompt(query, context or {})
@@ -344,7 +389,7 @@ class BaseGalaxyAgent(ABC):
 
         # Check if we need to use a custom base URL
         if base_url:
-            if HAS_PYDANTIC_AI and OpenAIChatModel:
+            if HAS_PYDANTIC_AI and OpenAIModel is not None:
                 # Remove the "openai:" prefix if present
                 if model_name.startswith("openai:"):
                     model_name = model_name[7:]
@@ -354,8 +399,8 @@ class BaseGalaxyAgent(ABC):
                     api_key=api_key or "sk-local-test-master-key",
                     base_url=base_url,
                 )
-                # Return the OpenAIChatModel with custom provider
-                return OpenAIChatModel(model_name, provider=custom_provider)
+                # Return the OpenAIModel with custom provider
+                return OpenAIModel(model_name, provider=custom_provider)
 
         # Default case - use standard OpenAI configuration
         if api_key:

@@ -10,6 +10,8 @@ from .base import (
     GalaxyAgentDependencies,
 )
 from .custom_tool import CustomToolAgent
+from .data_analysis import DataAnalysisAgent
+from .data_analysis_dspy_agent import DataAnalysisDSPyAgent
 from .dspy_agent import DSPyGalaxyAgent
 from .error_analysis import ErrorAnalysisAgent
 from .gtn_training import GTNTrainingAgent
@@ -29,6 +31,7 @@ __all__ = [
     "GTNTrainingAgent",
     "WorkflowOrchestratorAgent",
     "DSPyGalaxyAgent",
+    "DataAnalysisDSPyAgent",
 ]
 
 # Global agent registry instance
@@ -42,3 +45,5 @@ agent_registry.register("custom_tool", CustomToolAgent)
 agent_registry.register("gtn_training", GTNTrainingAgent)
 agent_registry.register("orchestrator", WorkflowOrchestratorAgent)
 agent_registry.register("dspy_tool_recommendation", DSPyGalaxyAgent)
+agent_registry.register("data_analysis", DataAnalysisAgent)
+agent_registry.register("data_analysis_dspy", DataAnalysisDSPyAgent)

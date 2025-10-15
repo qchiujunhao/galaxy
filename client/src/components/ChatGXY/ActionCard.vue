@@ -1,5 +1,5 @@
 <template>
-    <div v-if="suggestions.length > 0" class="action-card">
+    <div v-if="sortedSuggestions.length > 0" class="action-card">
         <div class="action-header">
             <strong>Suggested Actions:</strong>
         </div>
@@ -41,7 +41,9 @@ defineEmits<{
 
 // Sort suggestions by priority (1 = highest)
 const sortedSuggestions = computed(() => {
-    return [...props.suggestions].sort((a, b) => a.priority - b.priority);
+    return [...props.suggestions]
+        .filter((suggestion) => suggestion.action_type !== ActionType.PYODIDE_EXECUTE)
+        .sort((a, b) => a.priority - b.priority);
 });
 
 function getIcon(actionType: ActionType): string {
