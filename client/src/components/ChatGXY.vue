@@ -12,7 +12,7 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/vue-fontawesome";
 import { BSkeleton } from "bootstrap-vue";
-import { nextTick, onMounted, ref } from "vue";
+import { computed, nextTick, onMounted, ref } from "vue";
 
 import { GalaxyApi } from "@/api";
 import { type ActionSuggestion, type AgentResponse, useAgentActions } from "@/composables/agentActions";
@@ -23,6 +23,16 @@ import ActionCard from "./ChatGXY/ActionCard.vue";
 import LoadingSpan from "@/components/LoadingSpan.vue";
 
 library.add(faThumbsUp, faThumbsDown, faPaperPlane, faUser, faMagic, faHistory, faTrash, faClock);
+
+interface AnalysisStep {
+    type: 'thought' | 'action' | 'observation' | 'conclusion';
+    content: string;
+    requirements?: string[];
+    status?: 'pending' | 'running' | 'completed' | 'error';
+    stdout?: string;
+    stderr?: string;
+    success?: boolean;
+}
 
 interface Message {
     id: string;
@@ -39,6 +49,7 @@ interface Message {
         selected_agent: string;
         reasoning: string;
     };
+    analysisSteps?: AnalysisStep[];
 }
 
 interface ChatHistoryItem {
@@ -49,6 +60,13 @@ interface ChatHistoryItem {
     agent_response?: AgentResponse; // Full agent response with suggestions
     timestamp: string;
     feedback?: number | null;
+}
+
+interface DatasetOption {
+    id: string;
+    name: string;
+    extension?: string;
+    size?: number;
 }
 
 const query = ref("");
@@ -63,6 +81,15 @@ const loadingHistory = ref(false);
 const currentChatId = ref<number | null>(null);
 const hasLoadedInitialChat = ref(false);
 
+const datasetOptions = ref<DatasetOption[]>([]);
+const selectedDatasets = ref<string[]>([]);
+const loadingDatasets = ref(false);
+const datasetError = ref("");
+
+const selectedDatasetRecords = computed(() =>
+    datasetOptions.value.filter((dataset) => selectedDatasets.value.includes(dataset.id))
+);
+
 const { renderMarkdown } = useMarkdown({ openLinksInNewPage: true, removeNewlinesAfterList: true });
 const { processingAction, handleAction } = useAgentActions();
 
@@ -72,11 +99,13 @@ const agentTypes = [
     { value: "tool_recommendation", label: "🔧 Tool Recommendation", description: "Find the right tools" },
     { value: "dspy_tool_recommendation", label: "🤖 DSPy Tools", description: "Advanced reasoning for tool selection" },
     { value: "custom_tool", label: "⚡ Custom Tool", description: "Create custom tools" },
-    { value: "dataset_analyzer", label: "📊 Dataset Analyzer", description: "Analyze datasets" },
+    { value: "data_analysis", label: "🧪 Data Analysis", description: "Explore datasets with generated code" },
+    { value: "data_analysis_dspy", label: "📊 Data Analysis (DSPy)", description: "Iterative planning with DSPy + auto code execution" },
     { value: "gtn_training", label: "📚 Training Materials", description: "Find tutorials and guides" },
 ];
 
 onMounted(async () => {
+    await loadDatasetOptions();
     // Try to load the most recent chat
     await loadLatestChat();
 
@@ -105,6 +134,110 @@ function generateId() {
     return `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 }
 
+function applyDatasetSelectionFromMessages(conversation: any[]) {
+    for (let i = conversation.length - 1; i >= 0; i -= 1) {
+        const entry = conversation[i];
+        const datasets = entry?.dataset_ids;
+        if (Array.isArray(datasets) && datasets.length > 0) {
+            selectedDatasets.value = datasets.map(String);
+            return;
+        }
+    }
+}
+
+
+
+function getLatestUserQuery(): string {
+    for (let i = messages.value.length - 1; i >= 0; i -= 1) {
+        const entry = messages.value[i];
+        if (entry.role === 'user') {
+            return entry.content;
+        }
+    }
+    return '';
+}
+
+
+function normaliseAnalysisSteps(raw: unknown): AnalysisStep[] {
+    if (!Array.isArray(raw)) {
+        return [];
+    }
+
+    return raw
+        .map((step) => {
+            if (!step || typeof step !== 'object') {
+                return null;
+            }
+            const record = step as Record<string, unknown>;
+            const type = record.type;
+            if (type !== 'thought' && type !== 'action' && type !== 'observation' && type !== 'conclusion') {
+                return null;
+            }
+            const content = String(record.content ?? '');
+            const requirements = Array.isArray(record.requirements)
+                ? (record.requirements as unknown[]).map(String)
+                : undefined;
+            const statusValue = record.status;
+            const status: AnalysisStep['status'] | undefined =
+                statusValue === 'running' || statusValue === 'completed' || statusValue === 'error'
+                    ? statusValue
+                    : undefined;
+            const stdout = typeof record.stdout === 'string' ? record.stdout : undefined;
+            const stderr = typeof record.stderr === 'string' ? record.stderr : undefined;
+            const success = typeof record.success === 'boolean' ? record.success : undefined;
+            return {
+                type,
+                content,
+                requirements,
+                status: type === 'action' ? status ?? 'pending' : undefined,
+                stdout,
+                stderr,
+                success,
+            } as AnalysisStep;
+        })
+        .filter((step): step is AnalysisStep => Boolean(step));
+}
+
+async function loadDatasetOptions() {
+    loadingDatasets.value = true;
+    datasetError.value = "";
+
+    try {
+        const { data, error } = await GalaxyApi().GET("/api/datasets", {
+            params: {
+                query: {
+                    limit: 200,
+                    order: "update_time-dsc",
+                },
+            },
+        });
+
+        if (error) {
+            datasetError.value = errorMessageAsString(error, "Failed to load datasets");
+            datasetOptions.value = [];
+            return;
+        }
+
+        if (Array.isArray(data)) {
+            datasetOptions.value = data
+                .map((item: any) => {
+                    const id = String(item.id || item.dataset_id || item.hda_id || "");
+                    const name = item.name || `Dataset ${item.hid || ""}`;
+                    const extension = item.extension || item.ext || item.file_ext || undefined;
+                    const sizeValue = item.file_size_bytes ?? item.file_size ?? item.size ?? undefined;
+                    const size = typeof sizeValue === "number" ? sizeValue : Number(sizeValue ?? 0);
+                    return id ? { id, name, extension, size: Number.isFinite(size) ? size : undefined } : null;
+                })
+                .filter((entry): entry is DatasetOption => Boolean(entry));
+        }
+    } catch (e) {
+        datasetError.value = errorMessageAsString(e, "Failed to load datasets");
+        datasetOptions.value = [];
+    } finally {
+        loadingDatasets.value = false;
+    }
+}
+
 async function submitQuery() {
     if (!query.value.trim()) {
         return;
@@ -131,11 +264,17 @@ async function submitQuery() {
 
     try {
         const { data, error } = await GalaxyApi().POST("/api/chat", {
+            params: {
+                query: {
+                    agent_type: selectedAgentType.value,
+                },
+            },
             body: {
                 job_id: null,
                 query: currentQuery,
                 agent_type: selectedAgentType.value,
                 exchange_id: currentChatId.value, // Backend will load full conversation history
+                dataset_ids: selectedDatasets.value,
             } as any,
         });
 
@@ -166,6 +305,9 @@ async function submitQuery() {
                 currentChatId.value = exchangeId;
             }
 
+            const metadata = (agentResponse as any)?.metadata as Record<string, unknown> | undefined;
+            const analysisSteps = metadata ? normaliseAnalysisSteps((metadata as any)?.analysis_steps) : [];
+
             const assistantMessage: Message = {
                 id: generateId(),
                 role: "assistant",
@@ -179,6 +321,7 @@ async function submitQuery() {
                 agentResponse: agentResponse,
                 suggestions: agentResponse?.suggestions || [],
                 routingInfo: (data as any)?.routing_info,
+                analysisSteps: analysisSteps.length ? analysisSteps : undefined,
             };
             messages.value.push(assistantMessage);
 
@@ -262,7 +405,7 @@ function getAgentIcon(agentType?: string) {
             return "🤖";
         case "custom_tool":
             return "⚡";
-        case "dataset_analyzer":
+        case "data_analysis":
             return "📊";
         case "gtn_training":
             return "📚";
@@ -283,7 +426,7 @@ function getAgentDescription(agentType?: string) {
         "tool_recommendation": "Finding the right Galaxy tools for your analysis",
         "dspy_tool_recommendation": "Advanced reasoning for tool selection using DSPy",
         "custom_tool": "Creating custom Galaxy tools and wrappers", 
-        "dataset_analyzer": "Analyzing datasets and data quality assessment",
+        "data_analysis": "Exploratory analysis and code-driven insights",
         "gtn_training": "Finding tutorials and training materials"
     };
     return descriptions[agentType as keyof typeof descriptions] || "General AI assistance";
@@ -364,11 +507,21 @@ async function loadPreviousChat(item: ChatHistoryItem) {
                     if (msg.agent_response) {
                         message.agentResponse = msg.agent_response;
                         message.suggestions = msg.agent_response.suggestions || [];
+                        const metadata = (msg.agent_response as any)?.metadata as Record<string, unknown> | undefined;
+                        const steps = metadata ? normaliseAnalysisSteps((metadata as any)?.analysis_steps) : [];
+                        if (steps.length) {
+                            message.analysisSteps = steps;
+                        }
                     }
                 }
 
                 messages.value.push(message);
+
+                if (msg.role === "assistant") {
+                }
             });
+
+            applyDatasetSelectionFromMessages(fullConversation);
         } else {
             // Fallback to single message if no full conversation available
             loadSingleMessageFallback(item);
@@ -407,12 +560,23 @@ function loadSingleMessageFallback(item: ChatHistoryItem) {
     if (item.agent_response) {
         assistantMessage.agentResponse = item.agent_response;
         assistantMessage.suggestions = item.agent_response.suggestions || [];
+        const metadata = (item.agent_response as any)?.metadata as Record<string, unknown> | undefined;
+        const steps = metadata ? normaliseAnalysisSteps((metadata as any)?.analysis_steps) : [];
+        if (steps.length) {
+            assistantMessage.analysisSteps = steps;
+        }
     }
 
     messages.value = [userMessage, assistantMessage];
     currentChatId.value = item.id;
     showHistory.value = false;
     nextTick(() => scrollToBottom());
+
+    const metadataDatasets = (item.agent_response as any)?.metadata?.datasets_used;
+    if (Array.isArray(metadataDatasets) && metadataDatasets.length > 0) {
+        selectedDatasets.value = metadataDatasets.map(String);
+    }
+
 }
 
 async function loadLatestChat() {
@@ -549,6 +713,37 @@ function formatTime(timestamp: string) {
 
             <!-- Main Chat Area -->
             <div ref="chatContainer" class="chat-messages flex-grow-1">
+                <div class="dataset-selector-panel card mb-3">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center justify-content-between mb-2">
+                            <label for="dataset-select" class="mb-0">Datasets</label>
+                            <small v-if="loadingDatasets" class="text-muted">Loading…</small>
+                        </div>
+                        <select
+                            id="dataset-select"
+                            v-model="selectedDatasets"
+                            multiple
+                            class="form-control"
+                            :disabled="loadingDatasets || busy">
+                            <option
+                                v-for="dataset in datasetOptions"
+                                :key="dataset.id"
+                                :value="dataset.id">
+                                {{ dataset.name }}
+                            </option>
+                        </select>
+                        <div v-if="datasetError" class="text-danger small mt-2">{{ datasetError }}</div>
+                        <div v-else class="selected-datasets mt-2" v-show="selectedDatasetRecords.length">
+                            <span
+                                v-for="dataset in selectedDatasetRecords"
+                                :key="dataset.id"
+                                class="badge badge-primary mr-1">
+                                {{ dataset.name }}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
                 <div
                     v-for="message in messages"
                     :key="message.id"
@@ -583,18 +778,71 @@ function formatTime(timestamp: string) {
                         </div>
                     </div>
 
-                    <div class="message-content">
-                        <!-- eslint-disable-next-line vue/no-v-html -->
-                        <div v-if="message.role === 'assistant'" v-html="renderMarkdown(message.content)" />
-                        <div v-else>{{ message.content }}</div>
-                    </div>
 
-                    <!-- Action suggestions for assistant messages -->
-                    <ActionCard
+<div class="message-content">
+    <!-- eslint-disable-next-line vue/no-v-html -->
+    <div v-if="message.role === 'assistant'" v-html="renderMarkdown(message.content)" />
+    <div v-else>{{ message.content }}</div>
+</div>
+
+<div v-if="message.analysisSteps?.length" class="analysis-steps card mt-2">
+    <div
+        v-for="(step, idx) in message.analysisSteps"
+        :key="idx"
+        class="analysis-step"
+        :class="[step.type, step.status ?? '']">
+        <div class="analysis-step-header">
+            <span class="step-label">
+                {{ step.type === 'thought'
+                    ? 'Plan'
+                    : step.type === 'action'
+                        ? 'Action'
+                        : step.type === 'observation'
+                            ? 'Observation'
+                            : 'Conclusion' }}
+            </span>
+            <span
+                v-if="step.type === 'action' && step.status"
+                class="step-status"
+                :class="step.status">
+                {{ step.status }}
+            </span>
+            <span
+                v-else-if="step.type === 'observation' && step.success !== undefined"
+                class="step-status"
+                :class="step.success ? 'completed' : 'error'">
+                {{ step.success ? 'success' : 'error' }}
+            </span>
+        </div>
+        <div class="analysis-step-body">
+            <pre v-if="step.type === 'action'">{{ step.content }}</pre>
+            <div v-else-if="step.type === 'observation'">
+                <div v-if="step.stdout">
+                    <small class="text-muted">stdout</small>
+                    <pre>{{ step.stdout }}</pre>
+                </div>
+                <div v-if="step.stderr">
+                    <small class="text-muted">stderr</small>
+                    <pre class="text-danger">{{ step.stderr }}</pre>
+                </div>
+                <div v-if="!step.stdout && !step.stderr">No textual output.</div>
+            </div>
+            <div v-else>{{ step.content }}</div>
+            <div v-if="step.type === 'action' && step.requirements?.length" class="step-requirements">
+                <small class="text-muted">requirements: {{ step.requirements.join(', ') }}</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Action suggestions for assistant messages -->
+<ActionCard
                         v-if="message.role === 'assistant' && message.suggestions?.length"
                         :suggestions="message.suggestions"
                         :processing-action="processingAction"
                         @handle-action="(action) => handleAction(action, message.agentResponse || {})" />
+
+
 
                     <div
                         v-if="
@@ -697,6 +945,90 @@ function formatTime(timestamp: string) {
     padding: 1rem;
     background: #f8f9fa;
 }
+
+.analysis-steps {
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    padding: 0.75rem;
+    background: white;
+}
+
+.analysis-step + .analysis-step {
+    margin-top: 0.75rem;
+}
+
+.analysis-step-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.analysis-step-header .step-label {
+    text-transform: capitalize;
+}
+
+.analysis-step-header .step-status {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    padding: 0.1rem 0.4rem;
+    border-radius: 9999px;
+    margin-left: 0.5rem;
+}
+
+.analysis-step.running .step-status {
+    background: #fff3cd;
+    color: #856404;
+}
+
+.analysis-step.completed .step-status {
+    background: #d4edda;
+    color: #155724;
+}
+
+.analysis-step.error .step-status {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+.analysis-step-body {
+    margin-top: 0.5rem;
+    font-size: 0.9rem;
+}
+
+.analysis-step-body pre {
+    background: #212529;
+    color: #f8f9fa;
+    padding: 0.5rem;
+    border-radius: 4px;
+    white-space: pre-wrap;
+}
+
+.analysis-step-body .text-danger {
+    color: #dc3545 !important;
+}
+
+.step-requirements {
+    margin-top: 0.35rem;
+    font-size: 0.75rem;
+}
+
+.dataset-selector-panel {
+    background: white;
+    border: 1px solid #dee2e6;
+}
+
+
+
+
+
+
+
+
+
+
 
 .message {
     margin-bottom: 1.5rem;

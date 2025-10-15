@@ -99,6 +99,7 @@ class ChatManager:
                 "query": query,
                 "response": response_data,
                 "agent_type": agent_type,
+                "dataset_ids": [],
             }
         else:
             # Preserve the full response structure including agent_response
@@ -109,6 +110,9 @@ class ChatManager:
                 ),
                 "agent_type": agent_type,
                 "agent_response": response_data.get("agent_response") if isinstance(response_data, dict) else None,
+                "dataset_ids": response_data.get("dataset_ids", [])
+                if isinstance(response_data, dict)
+                else [],
             }
         message_content = json.dumps(conversation_data)
 
@@ -271,32 +275,60 @@ class ChatManager:
         import json
 
         if not format_for_pydantic_ai or not HAS_PYDANTIC_AI:
-            # Format as simple role/content dictionaries
+            # Format as rich role/content dictionaries for backend agents
             for msg in chat_exchange.messages:
                 try:
-                    # Parse the JSON to get query and response
                     data = json.loads(msg.message)
-                    # Add user message
-                    if "query" in data:
-                        messages.append({"role": "user", "content": data["query"]})
-                    # Add assistant message
-                    if "response" in data:
-                        messages.append({"role": "assistant", "content": data["response"]})
-                except (json.JSONDecodeError, KeyError):
-                    # Fallback for non-JSON messages
+                except (json.JSONDecodeError, TypeError, AttributeError):
                     messages.append({"role": "assistant", "content": msg.message})
+                    continue
+
+                role = data.get("role")
+                if role == "execution_result":
+                    messages.append({
+                        "role": "execution_result",
+                        "stdout": data.get("stdout", ""),
+                        "stderr": data.get("stderr", ""),
+                        "artifacts": data.get("artifacts", []),
+                        "success": data.get("success"),
+                        "task_id": data.get("task_id"),
+                    })
+                    continue
+
+                if "query" in data:
+                    entry = {"role": "user", "content": data["query"]}
+                    if data.get("dataset_ids"):
+                        entry["dataset_ids"] = data.get("dataset_ids")
+                    messages.append(entry)
+
+                if "response" in data:
+                    entry = {"role": "assistant", "content": data["response"]}
+                    if data.get("agent_type"):
+                        entry["agent_type"] = data.get("agent_type")
+                    if data.get("dataset_ids"):
+                        entry["dataset_ids"] = data.get("dataset_ids")
+                    if data.get("agent_response"):
+                        entry["agent_response"] = data.get("agent_response")
+                    messages.append(entry)
+
             return messages
         else:
             # Format for pydantic-ai
             for msg in chat_exchange.messages:
                 try:
                     data = json.loads(msg.message)
-                    if "query" in data:
-                        messages.append(ModelRequest(content=data["query"]))
-                    if "response" in data:
-                        messages.append(ModelResponse(content=data["response"]))
-                except (json.JSONDecodeError, KeyError):
+                except (json.JSONDecodeError, TypeError, AttributeError):
                     messages.append(ModelResponse(content=msg.message))
+                    continue
+
+                if data.get("role") == "execution_result":
+                    # Execution results aren't part of the dialog turn history for the LLM
+                    continue
+
+                if "query" in data:
+                    messages.append(ModelRequest(content=data["query"]))
+                if "response" in data:
+                    messages.append(ModelResponse(content=data["response"]))
             return messages
 
     def get_user_chat_history(

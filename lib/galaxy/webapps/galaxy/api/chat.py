@@ -1,7 +1,6 @@
-"""
-API Controller providing Chat functionality
-"""
+"""API Controller providing Chat functionality"""
 
+import json
 import logging
 from typing import (
     Annotated,
@@ -17,6 +16,7 @@ from fastapi import (
     Path,
     Query,
 )
+from pydantic import BaseModel, Field
 
 from galaxy.config import GalaxyAppConfiguration
 from galaxy.exceptions import ConfigurationError
@@ -95,6 +95,17 @@ JobIdPathParam = Optional[
 ]
 
 
+class PyodideResultPayload(BaseModel):
+    """Payload submitted after client-side Pyodide execution."""
+
+    task_id: Optional[str] = Field(default=None, description="Agent-specified task identifier")
+    stdout: str = Field(default="", description="Captured stdout")
+    stderr: str = Field(default="", description="Captured stderr")
+    artifacts: List[Dict[str, Any]] = Field(default_factory=list, description="Artifacts generated during execution")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional execution metadata")
+    success: bool = Field(default=True, description="Whether the execution succeeded")
+
+
 @router.cbv
 class ChatAPI:
     config: GalaxyAppConfiguration = depends(GalaxyAppConfiguration)
@@ -139,6 +150,8 @@ class ChatAPI:
         # Initialize response structure
         result = {"response": "", "error_code": 0, "error_message": "", "agent_response": None}
 
+        dataset_ids: List[str] = []
+
         # Determine query source - either from payload (job-based) or query param (general)
         if payload and payload.query:
             # Old format: payload body with query and context string
@@ -146,6 +159,8 @@ class ChatAPI:
             # Context from payload is a string (e.g., "tool_error"), convert to dict for agent system
             context_str = payload.context if hasattr(payload, "context") else None
             query_context = {"context_type": context_str} if context_str else {}
+            if getattr(payload, "dataset_ids", None):
+                dataset_ids = [str(ds_id) for ds_id in payload.dataset_ids or []]
         elif query:
             # New format: query parameters (context not supported in this path)
             query_text = query
@@ -181,6 +196,8 @@ class ChatAPI:
             if HAS_AGENTS and HAS_PYDANTIC_AI:
                 # Build context with conversation history
                 full_context = query_context.copy() if query_context else {}
+                if dataset_ids:
+                    full_context["dataset_ids"] = dataset_ids
 
                 # If we have an exchange_id, ALWAYS load conversation history from database (source of truth)
                 if exchange_id:
@@ -200,6 +217,7 @@ class ChatAPI:
                 )
                 result["response"] = agent_response["content"]
                 result["agent_response"] = agent_response
+                result["dataset_ids"] = dataset_ids
             else:
                 # Fallback to legacy implementation
                 self._ensure_ai_configured()
@@ -224,6 +242,7 @@ class ChatAPI:
                         "response": result.get("response", ""),
                         "agent_type": agent_type,
                         "agent_response": result.get("agent_response"),
+                        "dataset_ids": dataset_ids,
                     }
                     message_content = json.dumps(conversation_data)
                     self.chat_manager.add_message(trans, exchange_id, message_content)
@@ -360,7 +379,6 @@ class ChatAPI:
             return []
 
         messages = []
-        import json
 
         for msg in exchange.messages:
             try:
@@ -373,6 +391,7 @@ class ChatAPI:
                             "role": "user",
                             "content": data["query"],
                             "timestamp": msg.create_time.isoformat() if msg.create_time else None,
+                            "dataset_ids": data.get("dataset_ids", []),
                         }
                     )
                 if "response" in data:
@@ -384,6 +403,20 @@ class ChatAPI:
                             "agent_response": data.get("agent_response"),
                             "timestamp": msg.create_time.isoformat() if msg.create_time else None,
                             "feedback": msg.feedback,
+                            "dataset_ids": data.get("dataset_ids", []),
+                        }
+                    )
+                elif data.get("role") == "execution_result":
+                    messages.append(
+                        {
+                            "role": "execution_result",
+                            "task_id": data.get("task_id"),
+                            "stdout": data.get("stdout", ""),
+                            "stderr": data.get("stderr", ""),
+                            "artifacts": data.get("artifacts", []),
+                            "metadata": data.get("metadata", {}),
+                            "success": data.get("success", False),
+                            "timestamp": msg.create_time.isoformat() if msg.create_time else None,
                         }
                     )
             except (json.JSONDecodeError, AttributeError):
@@ -398,6 +431,125 @@ class ChatAPI:
                 )
 
         return messages
+
+    @router.post("/api/chat/exchange/{exchange_id}/pyodide_result")
+    async def submit_pyodide_result(
+        self,
+        exchange_id: int,
+        payload: PyodideResultPayload,
+        trans: ProvidesUserContext = DependsOnTrans,
+        user: User = DependsOnUser,
+    ) -> Dict[str, Any]:
+        """Persist results from client-side Pyodide execution and trigger follow-up reasoning."""
+
+        if not user:
+            return {"message": "Authentication required"}
+
+        exchange = self.chat_manager.get_exchange_by_id(trans, exchange_id)
+        if not exchange:
+            return {"message": "Chat exchange not found"}
+
+        import json
+
+        execution_message = json.dumps(
+            {
+                "role": "execution_result",
+                "task_id": payload.task_id,
+                "stdout": payload.stdout,
+                "stderr": payload.stderr,
+                "artifacts": payload.artifacts,
+                "metadata": payload.metadata,
+                "success": payload.success,
+            }
+        )
+        self.chat_manager.add_message(trans, exchange_id, execution_message)
+
+        conversation_history = self.chat_manager.get_chat_history(trans, exchange_id, format_for_pydantic_ai=False)
+
+        raw_dataset_ids = payload.metadata.get("selected_dataset_ids") if payload.metadata else None
+        if isinstance(raw_dataset_ids, list):
+            dataset_ids = [str(ds_id) for ds_id in raw_dataset_ids]
+        else:
+            dataset_ids = []
+
+        agent_type = payload.metadata.get("agent_type") if payload.metadata else None
+        original_query = payload.metadata.get("original_query") if payload.metadata else None
+
+        refreshed_exchange = self.chat_manager.get_exchange_by_id(trans, exchange_id)
+        if refreshed_exchange:
+            for message in refreshed_exchange.messages:
+                try:
+                    data = json.loads(message.message)
+                except (json.JSONDecodeError, TypeError, AttributeError):
+                    continue
+
+                if not agent_type and data.get("agent_type"):
+                    agent_type = data.get("agent_type")
+                if not dataset_ids and data.get("dataset_ids"):
+                    dataset_ids = [str(ds_id) for ds_id in data.get("dataset_ids") or []]
+                if not original_query and data.get("query"):
+                    original_query = data.get("query")
+
+        query_text = original_query
+        if not query_text:
+            for entry in reversed(conversation_history):
+                if entry.get("role") == "user" and entry.get("content"):
+                    query_text = entry.get("content")
+                    break
+        if not query_text:
+            query_text = "Continue the analysis based on the latest execution result."
+
+        context: Dict[str, Any] = {"conversation_history": conversation_history}
+        if dataset_ids:
+            context["dataset_ids"] = dataset_ids
+
+        followup_response: Optional[Dict[str, Any]] = None
+        agent_type_to_use = agent_type or "auto"
+
+        try:
+            followup_response = await self._get_agent_response_full(
+                query_text,
+                agent_type_to_use,
+                trans,
+                user,
+                job=None,
+                context=context,
+            )
+        except Exception as exc:
+            log.error(
+                "Failed to generate follow-up after Pyodide execution for exchange %s: %s",
+                exchange_id,
+                exc,
+                exc_info=True,
+            )
+            return {"message": "Execution result stored", "error": str(exc)}
+
+        response_agent_type = followup_response.get("agent_type", agent_type_to_use)
+
+        followup_message = json.dumps(
+            {
+                "response": followup_response.get("content", ""),
+                "agent_type": response_agent_type,
+                "agent_response": followup_response,
+                "dataset_ids": dataset_ids,
+            }
+        )
+        self.chat_manager.add_message(trans, exchange_id, followup_message)
+
+        log.info(
+            "Stored Pyodide execution result and generated follow-up for exchange %s (task_id=%s, success=%s)",
+            exchange_id,
+            payload.task_id,
+            payload.success,
+        )
+
+        return {
+            "message": "Execution result stored",
+            "response": followup_response.get("content", ""),
+            "agent_response": followup_response,
+            "dataset_ids": dataset_ids,
+            "exchange_id": exchange_id,
+        }
 
     def _ensure_ai_configured(self):
         """Ensure AI libraries are available and configured"""

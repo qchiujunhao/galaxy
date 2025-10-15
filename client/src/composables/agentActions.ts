@@ -18,6 +18,7 @@ export enum ActionType {
     TEST_TOOL = "test_tool",
     REFINE_QUERY = "refine_query",
     VIEW_EXTERNAL = "view_external",
+    PYODIDE_EXECUTE = "pyodide_execute",
 }
 
 export interface ActionSuggestion {
@@ -83,6 +84,10 @@ export function useAgentActions() {
 
                 case ActionType.VIEW_EXTERNAL:
                     handleViewExternal(action);
+                    break;
+
+                case ActionType.PYODIDE_EXECUTE:
+                    toast.info("Generated code is running automatically in the browser.");
                     break;
 
                 default:
@@ -286,6 +291,7 @@ export function useAgentActions() {
             [ActionType.CONTACT_SUPPORT]: "🆘",
             [ActionType.REFINE_QUERY]: "✏️",
             [ActionType.VIEW_EXTERNAL]: "🔗",
+            [ActionType.PYODIDE_EXECUTE]: "🧪",
         };
         return icons[actionType] || "❓";
     }
