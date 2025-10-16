@@ -73,7 +73,8 @@ class QueryRouterAgent(BaseGalaxyAgent):
         - For errors, failures, or debugging, route to: **error_analysis**.
         - For creating new tools or tool wrappers, route to: **custom_tool**.
         - For finding tutorials, learning, or "how-to" questions, route to: **gtn_training**.
-        - For exploratory data analysis, statistics, or visualization, route to: **data_analysis**.
+        - For exploratory data analysis, statistics, or visualization, route to: **data_analysis_dspy** (preferred).
+        - Fall back to **data_analysis** only if the DSPy agent is unavailable.
         - For complex, multi-part queries (e.g., "fix my error AND find new tools AND show me a tutorial"), route to: **orchestrator**.
         - For anything else related to finding or using tools, route to: **tool_recommendation**.
 
@@ -152,7 +153,7 @@ class QueryRouterAgent(BaseGalaxyAgent):
                 ["create", "build", "make", "wrap", "custom tool", "new tool", "yaml", "xml definition"],
                 1.0,
             ),
-            "data_analysis": (
+            "data_analysis_dspy": (
                 [
                     "analysis",
                     "analyze",
@@ -163,8 +164,16 @@ class QueryRouterAgent(BaseGalaxyAgent):
                     "summary",
                     "explore",
                     "inspect",
+                    "pyodide",
+                    "browser",
                 ],
                 1.0,
+            ),
+            "data_analysis": (
+                [
+                    "legacy analysis",
+                ],
+                0.2,
             ),
             "tool_recommendation": (
                 [

@@ -8,22 +8,20 @@ Code generation and execution control are delegated entirely to DSPy.
 from __future__ import annotations
 
 import asyncio
-import base64
-import contextlib
-import io
 import json
 import logging
 import mimetypes
 import os
 import re
-import shutil
 import tempfile
-import traceback
-import builtins as py_builtins
+import uuid
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlencode
+
+from itsdangerous import URLSafeTimedSerializer
 
 from .base import (
     ActionSuggestion,
@@ -47,6 +45,8 @@ class DataAnalysisAgent(BaseGalaxyAgent):
 
     USE_PYDANTIC_AGENT = False
     DEBUG_LOG_PATH = Path(tempfile.gettempdir()) / "galaxy_data_analysis_debug.log"
+    DEFAULT_TIMEOUT_MS = 20_000
+    DATASET_TOKEN_SALT = "galaxy.agents.pyodide.dataset"
 
     def __init__(self, deps: GalaxyAgentDependencies):
         super().__init__(deps)
@@ -55,6 +55,19 @@ class DataAnalysisAgent(BaseGalaxyAgent):
         self._example_snippets = self._load_example_snippets(self._examples_path)
         self._planner = GalaxyDSPyPlanner(deps)
         self._last_query: str = ""
+        self._last_context_text: str = ""
+
+        config = getattr(deps, "config", None)
+        self._dataset_token_signer: Optional[URLSafeTimedSerializer] = None
+        self._dataset_token_ttl: int = 600
+        if config and getattr(config, "id_secret", None):
+            self._dataset_token_signer = URLSafeTimedSerializer(config.id_secret, salt=self.DATASET_TOKEN_SALT)
+            ttl_default = getattr(config, "pyodide_dataset_token_ttl", 600)
+            try:
+                ttl_value = int(ttl_default)
+            except (TypeError, ValueError):
+                ttl_value = 600
+            self._dataset_token_ttl = max(60, ttl_value)
 
     # BaseGalaxyAgent requires these abstract methods, but the DSPy variant does
     # not use the pydantic runtime.
@@ -77,7 +90,8 @@ class DataAnalysisAgent(BaseGalaxyAgent):
         conversation_history = context.get("conversation_history", [])
 
         execution_messages = [entry for entry in conversation_history if entry.get("role") == "execution_result"]
-        last_executed_task = self._extract_last_executed_task(execution_messages)
+        task_history = self._collect_task_history(conversation_history)
+        last_executed_task, latest_execution_message = self._match_execution_event(task_history, execution_messages)
 
         context_text = build_context_text(
             query,
@@ -120,7 +134,14 @@ class DataAnalysisAgent(BaseGalaxyAgent):
                 metadata=metadata,
             )
 
-        return self._response_from_plan(plan, query, context_text, datasets, last_executed_task)
+        return self._response_from_plan(
+            plan,
+            query,
+            context_text,
+            datasets,
+            last_executed_task,
+            latest_execution_message,
+        )
 
     def _response_from_plan(
         self,
@@ -129,16 +150,47 @@ class DataAnalysisAgent(BaseGalaxyAgent):
         context_text: str,
         datasets: List[str],
         last_executed_task: Optional[Dict[str, Any]],
+        latest_execution_message: Optional[Dict[str, Any]],
     ) -> AgentResponse:
         active_plan = plan
         code = (active_plan.python_code or "").strip()
         requirements = active_plan.requirements or []
         normalized_requirements = self._normalize_requirements(requirements)
 
+        dataset_descriptors, alias_map = self._dataset_descriptors(datasets)
+        log.debug(
+            "dataset_descriptors_pre_execution",
+            extra={
+                "descriptors": dataset_descriptors,
+                "alias_map_sample": {key: alias_map[key] for key in list(alias_map)[:5]},
+            },
+        )
+        if last_executed_task:
+            if isinstance(last_executed_task.get("datasets"), list):
+                dataset_descriptors = last_executed_task.get("datasets") or dataset_descriptors
+            if isinstance(last_executed_task.get("alias_map"), dict):
+                alias_map = dict(last_executed_task.get("alias_map") or alias_map)
+
         execution_result: Optional[Dict[str, Any]] = None
+        pyodide_task: Optional[Dict[str, Any]] = None
+
         should_execute = self._should_enqueue_execution(code, normalized_requirements, last_executed_task)
         if should_execute and code:
-            execution_result = self._execute_generated_code_locally(code, datasets, normalized_requirements)
+            pyodide_task = self._build_pyodide_task(code, normalized_requirements, dataset_descriptors, alias_map)
+            log.info(
+                "Dispatching Pyodide task %s with packages=%s datasets=%s",
+                pyodide_task.get("task_id"),
+                pyodide_task.get("packages"),
+                [descriptor.get("id") for descriptor in dataset_descriptors if descriptor.get("id")],
+            )
+        elif code and latest_execution_message and last_executed_task:
+            execution_result = self._format_execution_result(
+                latest_execution_message,
+                alias_map,
+                dataset_descriptors,
+                last_executed_task,
+                normalized_requirements,
+            )
             try:
                 refined_plan = self._planner.augment_with_execution(question, context_text, active_plan, execution_result)
                 active_plan = refined_plan
@@ -150,14 +202,33 @@ class DataAnalysisAgent(BaseGalaxyAgent):
         if active_plan.analysis_steps:
             analysis_steps = [dict(step) for step in active_plan.analysis_steps]
         else:
-            base_code = code if execution_result else ""
+            base_code = code if (execution_result or pyodide_task) else ""
             analysis_steps = self._build_analysis_steps(active_plan.summary, base_code, normalized_requirements)
+
+        if pyodide_task:
+            for step in reversed(analysis_steps):
+                if step.get("type") == "action":
+                    step["status"] = "pending"
+                    break
 
         if execution_result:
             analysis_steps = self._merge_execution_steps(analysis_steps, code, normalized_requirements, execution_result)
+            analysis_steps = self._deduplicate_actions(analysis_steps)
+        else:
+            analysis_steps = self._deduplicate_actions(analysis_steps)
 
+        log.debug(
+            "analysis_steps_pre_response",
+            extra={
+                "steps": analysis_steps,
+                "pyodide_task": bool(pyodide_task),
+                "execution_result": execution_result.get("success") if execution_result else None,
+            },
+        )
+
+        dataset_ids_used = [str(entry.get("id")) for entry in dataset_descriptors if entry.get("id")] or list(datasets)
         metadata: Dict[str, Any] = {
-            "datasets_used": datasets,
+            "datasets_used": dataset_ids_used,
             "summary": active_plan.summary,
             "analysis_steps": analysis_steps,
             "plots": active_plan.plots,
@@ -167,18 +238,40 @@ class DataAnalysisAgent(BaseGalaxyAgent):
             "completion_state": self._determine_completion_state(active_plan, execution_result),
             "raw_answer": active_plan.raw_answer,
             "requirements": normalized_requirements,
-            "is_complete": execution_result.get("success") if execution_result is not None else active_plan.is_complete,
+            "dataset_descriptors": dataset_descriptors,
         }
 
-        if execution_result:
+        if pyodide_task:
+            metadata["pyodide_task"] = pyodide_task
+            metadata["pyodide_status"] = "pending"
+            metadata["pyodide_context"] = {
+                "alias_map": alias_map,
+                "datasets": dataset_descriptors,
+                "requirements": normalized_requirements,
+            }
+            metadata["is_complete"] = False
+        elif execution_result is not None:
             metadata["execution"] = execution_result
             metadata["executed_task"] = {
+                "task_id": last_executed_task.get("task_id") if last_executed_task else None,
                 "code": self._normalize_code(code),
                 "requirements": normalized_requirements,
+                "datasets": dataset_descriptors,
+                "alias_map": alias_map,
             }
             metadata["stdout"] = execution_result.get("stdout", "")
             metadata["stderr"] = execution_result.get("stderr", "")
             metadata["artifacts"] = execution_result.get("artifacts", [])
+            metadata["pyodide_status"] = "completed" if execution_result.get("success") else "error"
+            metadata["is_complete"] = execution_result.get("success")
+            metadata["pyodide_context"] = {
+                "alias_map": alias_map,
+                "datasets": dataset_descriptors,
+                "requirements": normalized_requirements,
+            }
+        else:
+            metadata["pyodide_status"] = "completed" if active_plan.is_complete else "pending"
+            metadata["is_complete"] = active_plan.is_complete
 
         suggestions: List[ActionSuggestion] = []
         if execution_result and not execution_result.get("success", False):
@@ -192,8 +285,9 @@ class DataAnalysisAgent(BaseGalaxyAgent):
                 )
             )
 
+        follow_up_items = self._normalize_follow_up_items(active_plan.follow_up)
         base_priority = len(suggestions) + 1
-        for index, follow in enumerate(active_plan.follow_up):
+        for index, follow in enumerate(follow_up_items):
             suggestions.append(
                 ActionSuggestion(
                     action_type=ActionType.REFINE_QUERY,
@@ -210,6 +304,14 @@ class DataAnalysisAgent(BaseGalaxyAgent):
         elif execution_result:
             content = self._build_content_from_execution(active_plan.summary, execution_result)
             confidence = "low"
+        elif pyodide_task:
+            summary_text = active_plan.summary.strip() if active_plan.summary else ""
+            content = (
+                f"{summary_text}\n\nExecuting generated Python in the browser..."
+                if summary_text
+                else "Executing generated Python in the browser..."
+            )
+            confidence = "medium"
         else:
             content = active_plan.summary or next(
                 (step["content"] for step in analysis_steps if step.get("type") == "thought"),
@@ -232,97 +334,256 @@ class DataAnalysisAgent(BaseGalaxyAgent):
             return "complete" if execution_result.get("success") else "error"
         return "complete" if plan.is_complete else "pending"
 
-    def _execute_generated_code_locally(
-        self, code: str, dataset_ids: List[str], requirements: List[str]
+    def _collect_task_history(self, conversation_history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        tasks: List[Dict[str, Any]] = []
+        for entry in conversation_history:
+            agent_response = entry.get("agent_response")
+            if not isinstance(agent_response, dict):
+                continue
+            metadata = agent_response.get("metadata") or {}
+            context_payload = metadata.get("pyodide_context") or {}
+            for key in ("executed_task", "pyodide_task"):
+                candidate = metadata.get(key)
+                if not isinstance(candidate, dict):
+                    continue
+                code = candidate.get("code")
+                packages = candidate.get("requirements") or candidate.get("packages") or []
+                if not packages and isinstance(context_payload.get("requirements"), list):
+                    packages = context_payload.get("requirements")
+                if not code:
+                    continue
+                normalized = {
+                    "task_id": candidate.get("task_id"),
+                    "code": self._normalize_code(str(code)),
+                    "requirements": self._normalize_requirements(packages),
+                }
+                if isinstance(candidate.get("alias_map"), dict):
+                    normalized["alias_map"] = dict(candidate["alias_map"])
+                elif isinstance(context_payload.get("alias_map"), dict):
+                    normalized["alias_map"] = dict(context_payload["alias_map"])
+                if isinstance(candidate.get("datasets"), list):
+                    normalized["datasets"] = candidate["datasets"]
+                elif isinstance(context_payload.get("datasets"), list):
+                    normalized["datasets"] = context_payload["datasets"]
+                tasks.append(normalized)
+        return tasks
+
+    def _match_execution_event(
+        self,
+        task_history: List[Dict[str, Any]],
+        execution_messages: List[Dict[str, Any]],
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        if not task_history and not execution_messages:
+            return None, None
+
+        task_lookup: Dict[str, Dict[str, Any]] = {}
+        for task in task_history:
+            task_id = task.get("task_id")
+            if task_id:
+                task_lookup[str(task_id)] = task
+
+        matched_task: Optional[Dict[str, Any]] = None
+        matched_execution: Optional[Dict[str, Any]] = None
+
+        for entry in reversed(execution_messages):
+            task_id = entry.get("task_id")
+            if task_id and str(task_id) in task_lookup:
+                matched_task = task_lookup[str(task_id)]
+                matched_execution = entry
+                break
+
+        if matched_task is None and task_history:
+            matched_task = task_history[-1]
+
+        return matched_task, matched_execution
+
+    def _dataset_descriptors(
+        self,
+        dataset_ids: List[str],
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+        if not dataset_ids:
+            return [], {}
+
+        alias_map, metadata = self._prepare_dataset_aliases(dataset_ids)
+        descriptors: List[Dict[str, Any]] = []
+        alias_index: Dict[str, str] = {}
+
+        for entry in metadata:
+            dataset_id = entry.get("id")
+            if not dataset_id:
+                continue
+            aliases = entry.get("aliases") or []
+            descriptor = {
+                "id": dataset_id,
+                "name": entry.get("name"),
+                "size": entry.get("size"),
+                "aliases": aliases,
+                "path": entry.get("path"),
+            }
+            descriptors.append(descriptor)
+            alias_index[str(dataset_id)] = str(dataset_id)
+            for alias in aliases:
+                alias_index[str(alias)] = str(dataset_id)
+
+        if not descriptors:
+            for dataset_id in dataset_ids:
+                descriptors.append(
+                    {
+                        "id": dataset_id,
+                        "name": dataset_id,
+                        "size": None,
+                        "aliases": [dataset_id],
+                    }
+                )
+                alias_index[str(dataset_id)] = str(dataset_id)
+
+        if alias_map:
+            alias_index.update({str(key): str(value) for key, value in alias_map.items()})
+
+        return descriptors, alias_index
+
+    def _build_pyodide_task(
+        self,
+        code: str,
+        requirements: List[str],
+        dataset_descriptors: List[Dict[str, Any]],
+        alias_map: Dict[str, str],
     ) -> Dict[str, Any]:
-        alias_map, dataset_metadata = self._prepare_dataset_aliases(dataset_ids)
-        temp_root = Path(tempfile.mkdtemp(prefix="galaxy-data-analysis-"))
-        outputs_dir = temp_root / "outputs_dir"
-        generated_dir = outputs_dir / "generated_file"
-        generated_dir.mkdir(parents=True, exist_ok=True)
+        task_id = str(uuid.uuid4())
+        sanitized_code = self._sanitize_pyodide_code(code)
+        packages_set = {pkg for pkg in requirements if pkg}
+        packages_set.add("pandas")
+        packages = sorted(packages_set)
+        files: List[Dict[str, Any]] = []
+        for descriptor in dataset_descriptors:
+            dataset_id = descriptor.get("id")
+            if not dataset_id:
+                continue
+            download_url = self._dataset_download_url(str(dataset_id))
+            if not download_url:
+                log.warning("Unable to generate download URL for dataset %s", dataset_id)
+                continue
+            files.append(
+                {
+                    "id": dataset_id,
+                    "name": descriptor.get("name") or dataset_id,
+                    "size": descriptor.get("size"),
+                    "aliases": descriptor.get("aliases") or [],
+                    "url": download_url,
+                    "mime_type": self._guess_mime_type(descriptor.get("name")),
+                }
+            )
 
-        stdout_buffer = io.StringIO()
-        stderr_buffer = io.StringIO()
-        success = False
-        error_message: Optional[str] = None
+        config: Dict[str, Any] = {}
+        config_index = getattr(getattr(self.deps, "config", None), "pyodide_index_url", None)
+        if config_index:
+            config["index_url"] = config_index
 
-        def get_dataset_path(alias: str) -> str:
-            key = (alias or "").strip()
-            if key in alias_map:
-                return alias_map[key]
-            raise KeyError(f"Unknown dataset alias: {alias}")
-
-        def load_dataset(alias: str, **read_kwargs):
-            try:
-                import pandas as pd  # Local import to avoid mandatory dependency at module load time
-            except ImportError as exc:  # pragma: no cover - environment-specific
-                raise RuntimeError("pandas is required to load datasets in the data analysis agent") from exc
-
-            path = get_dataset_path(alias)
-            lower = path.lower()
-            if not read_kwargs and (lower.endswith(".tsv") or lower.endswith(".tab")):
-                read_kwargs["sep"] = "\t"
-            return pd.read_csv(path, **read_kwargs)
-
-        def _alias_aware_open(file, *args, **kwargs):
-            candidate = str(file)
-            if candidate in alias_map:
-                file = alias_map[candidate]
-            return py_builtins.open(file, *args, **kwargs)
-
-        builtins_proxy = dict(py_builtins.__dict__)
-        builtins_proxy["open"] = _alias_aware_open
-
-        exec_globals: Dict[str, Any] = {
-            "__name__": "__galaxy_data_analysis__",
-            "inputs": {"dataset_aliases": alias_map},
-            "load_dataset": load_dataset,
-            "get_dataset_path": get_dataset_path,
-            "outputs_dir": outputs_dir,
-            "Path": Path,
-            '__builtins__': builtins_proxy,
+        task: Dict[str, Any] = {
+            "task_id": task_id,
+            "action": "ExecutePythonInBrowser",
+            "code": sanitized_code,
+            "packages": packages,
+            "files": files,
+            "alias_map": alias_map,
+            "timeout_ms": self.DEFAULT_TIMEOUT_MS,
         }
+        if config:
+            task["config"] = config
+        return task
 
-        preexisting_keys = set(exec_globals.keys())
-
-        self._materialize_dataset_entries(temp_root, dataset_metadata, alias_map)
-        log.debug('workspace_contents', extra={'temp_root': str(temp_root), 'entries': os.listdir(temp_root)})
-
-        original_cwd = os.getcwd()
-        try:
-            os.chdir(temp_root)
-            with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
-                exec(code, exec_globals, exec_globals)  # noqa: S102 - deliberate execution of model-generated code
-            success = True
-        except Exception:  # pragma: no cover - execution paths depend on generated code
-            error_message = traceback.format_exc()
-        finally:
-            os.chdir(original_cwd)
-
-        stdout_value = stdout_buffer.getvalue().strip()
-        stderr_value = stderr_buffer.getvalue().strip()
-        if success:
-            scalar_summary = self._capture_new_scalars(exec_globals, preexisting_keys)
-            if scalar_summary:
-                stdout_value = (stdout_value + ('\n' if stdout_value else '') + scalar_summary).strip()
-        if error_message:
-            stderr_value = (stderr_value + ("\n" if stderr_value else "") + error_message).strip()
-
-        artifacts = self._collect_artifacts(outputs_dir)
-        shutil.rmtree(temp_root, ignore_errors=True)
-
+    def _format_execution_result(
+        self,
+        execution_message: Dict[str, Any],
+        alias_map: Dict[str, str],
+        dataset_descriptors: List[Dict[str, Any]],
+        executed_task: Dict[str, Any],
+        requirements: List[str],
+    ) -> Dict[str, Any]:
         result = {
-            "success": success,
-            "stdout": stdout_value,
-            "stderr": stderr_value,
-            "artifacts": artifacts,
+            "success": bool(execution_message.get("success")),
+            "stdout": (execution_message.get("stdout") or "").strip(),
+            "stderr": (execution_message.get("stderr") or "").strip(),
+            "artifacts": execution_message.get("artifacts") or [],
+            "task_id": execution_message.get("task_id"),
             "dataset_aliases": alias_map,
-            "datasets": dataset_metadata,
+            "datasets": dataset_descriptors,
             "requirements": requirements,
         }
-        if error_message:
-            result["error"] = error_message.splitlines()[-1]
+        if executed_task.get("alias_map"):
+            result["dataset_aliases"] = dict(executed_task.get("alias_map"))
+        if executed_task.get("datasets"):
+            result["datasets"] = executed_task.get("datasets")
         return result
+
+    def _sanitize_pyodide_code(self, code: str) -> str:
+        if not code:
+            return code
+        patterns = [
+            re.compile(r"^\s*import\s+pyodide\b"),
+            re.compile(r"^\s*from\s+pyodide\b"),
+            re.compile(r"pyodide\.loadPackage"),
+            re.compile(r"micropip\.install"),
+        ]
+        sanitized_lines: List[str] = []
+        for line in code.splitlines():
+            if any(pattern.search(line) for pattern in patterns):
+                continue
+            sanitized_lines.append(line)
+        return "\n".join(sanitized_lines).strip()
+
+    def _dataset_download_url(self, dataset_id: str) -> Optional[str]:
+        token = self._sign_dataset_download_token(dataset_id)
+        if not token:
+            return None
+
+        path = f"/api/chat/datasets/{dataset_id}/download"
+        trans = getattr(self.deps, "trans", None)
+        base_url = path
+        url_builder = getattr(trans, "url_builder", None)
+        if callable(url_builder):
+            try:
+                base_url = url_builder(path, qualified=False)  # Prefer relative URL for same-origin fetch
+            except TypeError:
+                try:
+                    base_url = url_builder(path)
+                except Exception:
+                    base_url = path
+            except Exception:
+                base_url = path
+
+        separator = "&" if "?" in base_url else "?"
+        return f"{base_url}{separator}{urlencode({'token': token})}"
+
+    def _sign_dataset_download_token(self, dataset_id: str) -> Optional[str]:
+        if not self._dataset_token_signer:
+            return None
+        trans = getattr(self.deps, "trans", None)
+        if not trans:
+            return None
+
+        session = getattr(trans, "galaxy_session", None)
+        session_id = getattr(session, "id", None)
+
+        encoded_user_id = None
+        if self.deps.user and getattr(trans, "security", None):
+            try:
+                encoded_user_id = trans.security.encode_id(self.deps.user.id)
+            except Exception:
+                encoded_user_id = None
+
+        payload = {
+            "dataset_id": dataset_id,
+            "user_id": encoded_user_id,
+            "session_id": session_id,
+        }
+        return self._dataset_token_signer.dumps(payload)
+
+    def _guess_mime_type(self, name: Optional[str]) -> Optional[str]:
+        if not name:
+            return None
+        mime_type, _ = mimetypes.guess_type(str(name))
+        return mime_type
 
     def _prepare_dataset_aliases(self, dataset_ids: List[str]) -> tuple[Dict[str, str], List[Dict[str, Any]]]:
         trans = getattr(self.deps, "trans", None)
@@ -426,19 +687,29 @@ class DataAnalysisAgent(BaseGalaxyAgent):
         steps: List[Dict[str, Any]] = []
         action_added = False
         normalized_code = (code or "").strip()
+        seen_codes: set[str] = set()
 
         for step in analysis_steps:
             step_copy = dict(step)
-            if step_copy.get("type") == "action" and not action_added:
-                if normalized_code:
+            if step_copy.get("type") == "action":
+                content_normalized = self._normalize_code(step_copy.get("content", ""))
+                if content_normalized in seen_codes:
+                    continue
+                if (
+                    not action_added
+                    and normalized_code
+                    and content_normalized == self._normalize_code(normalized_code)
+                ):
                     step_copy["content"] = normalized_code
-                step_copy["requirements"] = requirements
-                step_copy["status"] = "completed" if execution_result.get("success") else "error"
-                steps.append(step_copy)
-                steps.append(self._build_observation_step(execution_result))
-                action_added = True
-            else:
-                steps.append(step_copy)
+                    step_copy["requirements"] = requirements
+                    step_copy["status"] = "completed" if execution_result.get("success") else "error"
+                    steps.append(step_copy)
+                    steps.append(self._build_observation_step(execution_result))
+                    action_added = True
+                    seen_codes.add(content_normalized)
+                    continue
+                seen_codes.add(content_normalized)
+            steps.append(step_copy)
 
         if not action_added and normalized_code:
             steps.append(
@@ -495,100 +766,6 @@ class DataAnalysisAgent(BaseGalaxyAgent):
 
         return "\n\n".join(segments).strip()
 
-    def _materialize_dataset_entries(
-        self,
-        workspace: Path,
-        dataset_metadata: List[Dict[str, Any]],
-        alias_map: Dict[str, str],
-    ) -> None:
-        """Expose dataset files inside the temporary workspace for direct file-based access."""
-
-        for entry in dataset_metadata:
-            source_path = Path(entry.get("path") or "")
-            if not source_path.exists():
-                continue
-
-            candidate_names = set()
-            entry_name = entry.get("name")
-            if entry_name:
-                candidate_names.add(Path(str(entry_name)).name)
-            candidate_names.add(source_path.name)
-            for alias in entry.get("aliases") or []:
-                alias_name = Path(str(alias)).name
-                if "." in alias_name or alias_name == source_path.name:
-                    candidate_names.add(alias_name)
-
-            for candidate in candidate_names:
-                if not candidate:
-                    continue
-                destination = workspace / candidate
-                if destination.exists():
-                    continue
-                try:
-                    os.symlink(source_path, destination)
-                except OSError:
-                    try:
-                        shutil.copy(source_path, destination)
-                    except Exception as exc:  # pragma: no cover - fallback logging only
-                        log.debug("Unable to materialize dataset alias %s -> %s: %s", candidate, source_path, exc)
-
-        for alias, source in alias_map.items():
-            source_path = Path(source)
-            if not source_path.exists():
-                continue
-            destination = workspace / Path(str(alias)).name
-            if destination.exists():
-                continue
-            try:
-                os.symlink(source_path, destination)
-            except OSError:
-                try:
-                    shutil.copy(source_path, destination)
-                except Exception as exc:  # pragma: no cover - fallback logging only
-                    log.debug('Unable to materialize alias_map entry %s -> %s: %s', alias, source_path, exc)
-
-    def _capture_new_scalars(self, exec_globals: Dict[str, Any], preexisting: set[str]) -> str:
-        lines: List[str] = []
-        for key in sorted(exec_globals.keys()):
-            if key in preexisting or key.startswith('__'):
-                continue
-            value = exec_globals[key]
-            if callable(value):
-                continue
-            if isinstance(value, (int, float, str, bool)):
-                lines.append(f"{key} = {value!r}")
-            elif isinstance(value, (list, tuple)) and len(value) <= 10:
-                lines.append(f"{key} = {value!r}")
-            elif isinstance(value, dict) and len(value) <= 10:
-                try:
-                    preview = {k: value[k] for k in list(value)[:5]}
-                    lines.append(f"{key} = {preview!r}")
-                except Exception:
-                    continue
-        return '\n'.join(lines)
-
-    def _collect_artifacts(self, outputs_dir: Path) -> List[Dict[str, Any]]:
-        artifacts: List[Dict[str, Any]] = []
-        if not outputs_dir.exists():
-            return artifacts
-
-        for file in sorted(outputs_dir.rglob('*')):
-            if not file.is_file():
-                continue
-            relative_name = str(file.relative_to(outputs_dir))
-            size = file.stat().st_size
-            mime_type, _ = mimetypes.guess_type(relative_name)
-            artifact: Dict[str, Any] = {
-                "name": relative_name,
-                "size": size,
-                "mime_type": mime_type or "application/octet-stream",
-            }
-            if size <= 512 * 1024:
-                with file.open('rb') as handle:
-                    artifact["content_base64"] = base64.b64encode(handle.read()).decode('ascii')
-            artifacts.append(artifact)
-        return artifacts
-
     def _sanitize_alias(self, value: str) -> str:
         if not value:
             return ""
@@ -597,6 +774,35 @@ class DataAnalysisAgent(BaseGalaxyAgent):
         if sanitized and not sanitized[0].isalpha():
             sanitized = f"dataset_{sanitized}"
         return sanitized
+
+    def _deduplicate_actions(self, steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        deduped: List[Dict[str, Any]] = []
+        seen_codes: set[str] = set()
+        skip_next_observation = False
+        for step in steps:
+            step_type = str(step.get("type", "") or "").lower()
+            if step_type == "action":
+                normalized = self._normalize_code(step.get("content", ""))
+                if normalized in seen_codes:
+                    skip_next_observation = True
+                    continue
+                seen_codes.add(normalized)
+                skip_next_observation = False
+                deduped.append(step)
+            elif step_type == "observation":
+                if skip_next_observation:
+                    skip_next_observation = False
+                    continue
+                if (
+                    deduped
+                    and str(deduped[-1].get("type", "") or "").lower() == "observation"
+                    and self._normalize_code(deduped[-1].get("content", "")) == self._normalize_code(step.get("content", ""))
+                ):
+                    continue
+                deduped.append(step)
+            else:
+                deduped.append(step)
+        return deduped
 
     def _truncate_output(self, value: str, limit: int = 1200) -> str:
         text = (value or "").strip()
@@ -630,19 +836,6 @@ class DataAnalysisAgent(BaseGalaxyAgent):
         last_requirements = last_task.get("requirements", [])
         return normalized_requirements == last_requirements
 
-    def _extract_last_executed_task(
-        self, execution_messages: List[Dict[str, Any]]
-    ) -> Optional[Dict[str, Any]]:
-        for entry in reversed(execution_messages):
-            metadata = entry.get("metadata") or {}
-            task = metadata.get("executed_task") or metadata.get("pyodide_task")
-            if task and task.get("code"):
-                return {
-                    "code": self._normalize_code(str(task.get("code"))),
-                    "requirements": self._normalize_requirements(task.get("requirements") or []),
-                }
-        return None
-
     def _normalize_code(self, code: str) -> str:
         return "\n".join(line.rstrip() for line in (code or "").strip().splitlines())
 
@@ -671,6 +864,27 @@ class DataAnalysisAgent(BaseGalaxyAgent):
                 handle.write(json.dumps(payload) + "\n")
         except Exception as exc:  # pragma: no cover - best effort logging
             log.debug("Unable to write debug steps log: %s", exc)
+
+    def _normalize_follow_up_items(self, follow_up: Optional[List[Any]]) -> List[str]:
+        if not follow_up:
+            return []
+        items: List[str] = []
+        for entry in follow_up:
+            if entry is None:
+                continue
+            if isinstance(entry, str):
+                cleaned = entry.strip()
+                if cleaned:
+                    items.append(cleaned)
+            elif isinstance(entry, (list, tuple)):
+                joined = " ".join(str(part).strip() for part in entry if str(part).strip())
+                if joined:
+                    items.append(joined)
+            else:
+                text = str(entry).strip()
+                if text:
+                    items.append(text)
+        return items
 
     def _normalize_requirements(self, requirements: List[Any]) -> List[str]:
         return sorted({str(req).strip() for req in requirements if str(req).strip()})

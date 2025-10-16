@@ -12,11 +12,14 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/vue-fontawesome";
 import { BSkeleton } from "bootstrap-vue";
-import { computed, nextTick, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 
 import { GalaxyApi } from "@/api";
+import { getAppRoot } from "@/onload/loadConfig";
 import { type ActionSuggestion, type AgentResponse, useAgentActions } from "@/composables/agentActions";
 import { useMarkdown } from "@/composables/markdown";
+import { usePyodideRunner, type PyodideArtifact, type PyodideRunResult, type PyodideTask } from "@/composables/usePyodideRunner";
+import { useToast } from "@/composables/toast";
 import { errorMessageAsString } from "@/utils/simple-error";
 
 import ActionCard from "./ChatGXY/ActionCard.vue";
@@ -62,11 +65,21 @@ interface ChatHistoryItem {
     feedback?: number | null;
 }
 
-interface DatasetOption {
-    id: string;
-    name: string;
-    extension?: string;
+interface UploadedArtifact {
+    dataset_id: string;
+    name?: string;
     size?: number;
+    mime_type?: string;
+    download_url: string;
+    history_id?: string;
+}
+
+interface ExecutionState {
+    status: "pending" | "initialising" | "installing" | "fetching" | "running" | "submitting" | "completed" | "error";
+    stdout: string;
+    stderr: string;
+    artifacts: UploadedArtifact[];
+    errorMessage?: string;
 }
 
 const query = ref("");
@@ -89,6 +102,13 @@ const datasetError = ref("");
 const selectedDatasetRecords = computed(() =>
     datasetOptions.value.filter((dataset) => selectedDatasets.value.includes(dataset.id))
 );
+
+const toast = useToast();
+const pyodideRunner = usePyodideRunner();
+const pyodideExecutions = reactive<Record<string, ExecutionState>>({});
+const chatStream = ref<WebSocket | null>(null);
+const streamSupported = typeof window !== "undefined" && typeof WebSocket !== "undefined";
+const deliveredTaskIds = new Set<string>();
 
 const { renderMarkdown } = useMarkdown({ openLinksInNewPage: true, removeNewlinesAfterList: true });
 const { processingAction, handleAction } = useAgentActions();
@@ -155,6 +175,433 @@ function getLatestUserQuery(): string {
         }
     }
     return '';
+}
+
+
+function appendAssistantMessage(payload: any, fallbackAgentType: string): Message {
+    const agentResponse = (payload?.agent_response ?? payload?.response?.agent_response) as AgentResponse | undefined;
+    const content =
+        typeof payload === "string"
+            ? payload
+            : payload?.response ?? agentResponse?.content ?? "No response received";
+    const effectiveAgentType = agentResponse?.agent_type || (fallbackAgentType === "auto" ? "router" : fallbackAgentType);
+
+    const assistantMessage: Message = {
+        id: generateId(),
+        role: "assistant",
+        content,
+        timestamp: new Date(),
+        agentType: effectiveAgentType,
+        confidence: agentResponse?.confidence || (payload?.confidence as string) || "medium",
+        feedback: null,
+        agentResponse,
+        suggestions: agentResponse?.suggestions || [],
+        routingInfo: payload?.routing_info,
+    };
+
+    const metadata = agentResponse?.metadata as Record<string, unknown> | undefined;
+    if (metadata) {
+        const steps = normaliseAnalysisSteps((metadata as any)?.analysis_steps);
+        if (steps.length) {
+            assistantMessage.analysisSteps = steps;
+        }
+    }
+
+    messages.value.push(assistantMessage);
+
+    if (payload?.exchange_id) {
+        currentChatId.value = payload.exchange_id;
+    }
+
+    if (Array.isArray(payload?.dataset_ids) && payload.dataset_ids.length > 0) {
+        selectedDatasets.value = payload.dataset_ids.map(String);
+    }
+
+    maybeRunPyodideForMessage(assistantMessage);
+
+    return assistantMessage;
+}
+
+function maybeRunPyodideForMessage(message: Message) {
+    const metadata = message.agentResponse?.metadata as Record<string, any> | undefined;
+    if (!metadata) {
+        return;
+    }
+    const task = metadata.pyodide_task as PyodideTask | undefined;
+    if (!task) {
+        return;
+    }
+    const taskKey = task.task_id || message.id;
+    const existing = pyodideExecutions[taskKey];
+    if (existing) {
+        // Do not retry if we have already completed or errored out.
+        if (existing.status === "completed" || existing.status === "error") {
+            metadata.pyodide_status = existing.status;
+            return;
+        }
+        return;
+    }
+
+    const status = metadata.pyodide_status as string | undefined;
+    if (status === "error" || status === "completed") {
+        pyodideExecutions[taskKey] = {
+            status,
+            stdout: metadata.stdout || "",
+            stderr: metadata.stderr || "",
+            artifacts: [],
+            errorMessage: status === "error" ? metadata.error || "" : undefined,
+        } as ExecutionState;
+        return;
+    }
+    if (status && status !== "pending") {
+        return;
+    }
+
+    if (!pyodideRunner.isSupported.value) {
+        pyodideExecutions[taskKey] = {
+            status: "error",
+            stdout: "",
+            stderr: "",
+            artifacts: [],
+            errorMessage: "Browser does not support in-browser execution.",
+        };
+        metadata.pyodide_status = "error";
+        toast.warning("This browser cannot run the generated analysis code.");
+        return;
+    }
+
+    metadata.pyodide_retry_count = (metadata.pyodide_retry_count || 0) + 1;
+    if (metadata.pyodide_retry_count > 1) {
+        metadata.pyodide_status = "error";
+        pyodideExecutions[taskKey] = {
+            status: "error",
+            stdout: "",
+            stderr: "",
+            artifacts: [],
+            errorMessage: "Pyodide task exceeded retry limit.",
+        };
+        return;
+    }
+
+    runPyodideTaskForMessage(message, task, taskKey, metadata);
+}
+
+function runPyodideTaskForMessage(
+    message: Message,
+    task: PyodideTask,
+    taskKey: string,
+    metadata: Record<string, any>
+) {
+    const state = reactive<ExecutionState>({
+        status: "initialising",
+        stdout: "",
+        stderr: "",
+        artifacts: [],
+    });
+    pyodideExecutions[taskKey] = state;
+    metadata.pyodide_status = "running";
+
+    const runnerTask: PyodideTask = { ...task, task_id: taskKey };
+
+    pyodideRunner
+        .runTask(runnerTask, {
+            onStdout: (line) => {
+                state.stdout += line;
+            },
+            onStderr: (line) => {
+                state.stderr += line;
+            },
+            onStatus: (event) => {
+                state.status = mapStatus(event.status);
+            },
+        })
+        .then(async (result) => {
+            state.stdout = result.stdout;
+            state.stderr = result.stderr;
+            state.status = "submitting";
+            let uploadedArtifacts: UploadedArtifact[] = [];
+            try {
+                uploadedArtifacts = await uploadArtifacts(result.artifacts || []);
+                state.artifacts = uploadedArtifacts;
+                await submitPyodideExecutionResult(runnerTask, message, result, uploadedArtifacts);
+                state.status = result.success ? "completed" : "error";
+                if (!result.success && result.error) {
+                    state.errorMessage = result.error;
+                }
+                metadata.pyodide_status = state.status;
+            } catch (error) {
+                const errMessage = error instanceof Error ? error.message : String(error);
+                state.status = "error";
+                state.errorMessage = errMessage;
+                metadata.pyodide_status = "error";
+                toast.error(`Pyodide execution failed: ${errMessage}`);
+            }
+        })
+        .catch((error) => {
+            const errMessage = error instanceof Error ? error.message : String(error);
+            if (error && (error as any).stdout && typeof (error as any).stdout === "string") {
+                state.stdout += (error as any).stdout;
+            }
+            if (error && (error as any).stderr && typeof (error as any).stderr === "string") {
+                state.stderr += (error as any).stderr;
+            }
+            state.status = "error";
+            state.errorMessage = errMessage;
+            metadata.pyodide_status = "error";
+            toast.error(`Pyodide execution failed: ${errMessage}`);
+        });
+}
+function openChatStream(exchangeId: number) {
+    if (!streamSupported) {
+        return;
+    }
+    const existing = chatStream.value;
+    if (existing) {
+        const existingId = (existing as any)._exchangeId as number | undefined;
+        if (existingId === exchangeId &&
+            (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) {
+            return;
+        }
+        existing.close();
+    }
+
+    try {
+        const appRoot = getAppRoot(undefined, true) || "/";
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        const wsUrl = `${protocol}//${window.location.host}${appRoot}/api/chat/exchange/${exchangeId}/stream`;
+        const socket = new WebSocket(wsUrl);
+        (socket as any)._exchangeId = exchangeId;
+        socket.onopen = () => {
+            chatStream.value = socket;
+        };
+        socket.onmessage = (event: MessageEvent) => {
+            handleStreamMessage(event);
+        };
+        socket.onclose = () => {
+            if (chatStream.value === socket) {
+                chatStream.value = null;
+            }
+        };
+        socket.onerror = () => {
+            socket.close();
+        };
+    } catch (error) {
+        console.error("Failed to open chat stream", error);
+    }
+}
+
+function closeChatStream() {
+    const socket = chatStream.value;
+    if (socket) {
+        chatStream.value = null;
+        try {
+            socket.close();
+        } catch (error) {
+            console.error("Failed to close chat stream", error);
+        }
+    }
+}
+
+function handleStreamMessage(event: MessageEvent) {
+    try {
+        const payload = JSON.parse(event.data);
+        if (payload?.type === "exec_followup" && payload.payload) {
+            const taskId = payload.task_id as string | undefined;
+            if (taskId && deliveredTaskIds.has(taskId)) {
+                return;
+            }
+            if (taskId) {
+                deliveredTaskIds.add(taskId);
+            }
+            appendAssistantMessage(payload.payload, selectedAgentType.value);
+        }
+    } catch (error) {
+        console.error("Failed to process chat stream message", error);
+    }
+}
+
+
+async function uploadArtifacts(artifacts: PyodideArtifact[]): Promise<UploadedArtifact[]> {
+    if (!currentChatId.value) {
+        throw new Error("No active chat to attach artifacts.");
+    }
+    if (!artifacts || artifacts.length === 0) {
+        return [];
+    }
+
+    const results: UploadedArtifact[] = [];
+    for (const artifact of artifacts) {
+        const buffer = artifact.buffer;
+        if (!buffer) {
+            continue;
+        }
+        const blob = new Blob([buffer], { type: artifact.mime_type || "application/octet-stream" });
+        if (blob.size === 0) {
+            continue;
+        }
+        const formData = new FormData();
+        formData.append("file", blob, artifact.name || "artifact");
+        if (artifact.name) {
+            formData.append("name", artifact.name);
+        }
+        formData.append("mime_type", artifact.mime_type || blob.type || "application/octet-stream");
+        formData.append("size", String(blob.size));
+
+        const response = await fetch(`${getAppRoot()}api/chat/exchange/${currentChatId.value}/artifacts`, {
+            method: "POST",
+            body: formData,
+            credentials: "include",
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            const description = errorText || response.statusText || "Unknown error";
+            throw new Error(`Artifact upload failed (${response.status}): ${description}`);
+        }
+
+        const payload = (await response.json()) as UploadedArtifact;
+        if (payload.download_url) {
+            payload.download_url = resolveDownloadUrl(payload.download_url);
+        }
+        results.push(payload);
+        artifact.buffer = undefined;
+    }
+    return results;
+}
+
+function resolveDownloadUrl(url: string): string {
+    if (!url) {
+        return url;
+    }
+    if (/^https?:\/\//i.test(url)) {
+        return url;
+    }
+    const rootCandidate = getAppRoot(undefined, true) || window.location.origin;
+    const absoluteRoot = rootCandidate.replace(/\/$/, "");
+    if (url.startsWith("/")) {
+        return `${absoluteRoot}${url}`;
+    }
+    return `${getAppRoot()}${url}`;
+}
+
+
+function mapStatus(status: string): ExecutionState["status"] {
+    switch (status) {
+        case "initialising":
+            return "initialising";
+        case "installing":
+            return "installing";
+        case "fetch":
+            return "fetching";
+        case "executing":
+            return "running";
+        case "collecting":
+            return "submitting";
+        default:
+            return "running";
+    }
+}
+
+async function submitPyodideExecutionResult(
+    task: PyodideTask,
+    message: Message,
+    result: PyodideRunResult,
+    artifacts: UploadedArtifact[]
+) {
+    if (!currentChatId.value) {
+        throw new Error("No active chat to submit execution results.");
+    }
+
+    const useStream = streamSupported && chatStream.value?.readyState === WebSocket.OPEN;
+
+    const payload = {
+        task_id: task.task_id,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        artifacts,
+        success: result.success,
+        metadata: {
+            selected_dataset_ids: [...selectedDatasets.value],
+            agent_type: message.agentResponse?.agent_type || message.agentType,
+            original_query: getLatestUserQuery(),
+        },
+    };
+
+    const { data, error } = await GalaxyApi().POST(`/api/chat/exchange/${currentChatId.value}/pyodide_result`, {
+        body: payload,
+    });
+
+    if (error) {
+        throw new Error(errorMessageAsString(error, "Failed to submit execution results"));
+    }
+
+    if (!useStream && data) {
+        if (payload.task_id) {
+            deliveredTaskIds.add(payload.task_id);
+        }
+        appendAssistantMessage(data, message.agentType || selectedAgentType.value);
+    }
+}
+
+function pyodideStateForMessage(message: Message): ExecutionState | undefined {
+    const metadata = message.agentResponse?.metadata as Record<string, any> | undefined;
+    if (!metadata?.pyodide_task) {
+        return undefined;
+    }
+    const task = metadata.pyodide_task as PyodideTask;
+    const key = task.task_id || message.id;
+    return pyodideExecutions[key];
+}
+
+watch(
+    currentChatId,
+    (newId, oldId) => {
+        if (!streamSupported) {
+            return;
+        }
+        if (oldId && newId !== oldId) {
+            closeChatStream();
+            deliveredTaskIds.clear();
+        }
+        if (typeof newId === "number") {
+            openChatStream(newId);
+        }
+        if (newId == null) {
+            deliveredTaskIds.clear();
+        }
+    },
+    { immediate: false },
+);
+onBeforeUnmount(() => {
+    closeChatStream();
+});
+
+
+
+
+function downloadArtifact(artifact: UploadedArtifact) {
+    if (artifact.download_url) {
+        window.open(artifact.download_url, "_blank");
+        return;
+    }
+    toast.info("Artifact download is not available yet.");
+}
+
+function formatSize(size?: number): string {
+    if (size === undefined || size === null) {
+        return "";
+    }
+    if (size < 1024) {
+        return `${size} B`;
+    }
+    const units = ["KB", "MB", "GB", "TB"];
+    let value = size / 1024;
+    let unitIndex = 0;
+    while (value >= 1024 && unitIndex < units.length - 1) {
+        value /= 1024;
+        unitIndex += 1;
+    }
+    return `${value.toFixed(1)} ${units[unitIndex]}`;
 }
 
 
@@ -295,37 +742,9 @@ async function submitQuery() {
             await nextTick();
             scrollToBottom();
         } else if (data) {
-            // Extract agent response if available
-            const agentResponse = (data as any)?.agent_response;
-            const content = typeof data === "string" ? data : (data as any)?.response || "No response received";
+            const fallbackAgent = selectedAgentType.value === "auto" ? "router" : selectedAgentType.value;
+            appendAssistantMessage(data, fallbackAgent);
 
-            // Get the exchange ID if returned
-            const exchangeId = (data as any)?.exchange_id;
-            if (exchangeId) {
-                currentChatId.value = exchangeId;
-            }
-
-            const metadata = (agentResponse as any)?.metadata as Record<string, unknown> | undefined;
-            const analysisSteps = metadata ? normaliseAnalysisSteps((metadata as any)?.analysis_steps) : [];
-
-            const assistantMessage: Message = {
-                id: generateId(),
-                role: "assistant",
-                content: content,
-                timestamp: new Date(),
-                agentType:
-                    agentResponse?.agent_type ||
-                    (selectedAgentType.value === "auto" ? "router" : selectedAgentType.value),
-                confidence: agentResponse?.confidence || (data as any)?.confidence || "medium",
-                feedback: null,
-                agentResponse: agentResponse,
-                suggestions: agentResponse?.suggestions || [],
-                routingInfo: (data as any)?.routing_info,
-                analysisSteps: analysisSteps.length ? analysisSteps : undefined,
-            };
-            messages.value.push(assistantMessage);
-
-            // Scroll to bottom after adding assistant message
             await nextTick();
             scrollToBottom();
         }
@@ -518,6 +937,7 @@ async function loadPreviousChat(item: ChatHistoryItem) {
                 messages.value.push(message);
 
                 if (msg.role === "assistant") {
+                    maybeRunPyodideForMessage(message);
                 }
             });
 
@@ -572,6 +992,8 @@ function loadSingleMessageFallback(item: ChatHistoryItem) {
     showHistory.value = false;
     nextTick(() => scrollToBottom());
 
+    maybeRunPyodideForMessage(assistantMessage);
+
     const metadataDatasets = (item.agent_response as any)?.metadata?.datasets_used;
     if (Array.isArray(metadataDatasets) && metadataDatasets.length > 0) {
         selectedDatasets.value = metadataDatasets.map(String);
@@ -611,6 +1033,7 @@ function startNewChat() {
             isSystemMessage: true,
         },
     ];
+    Object.keys(pyodideExecutions).forEach((key) => delete pyodideExecutions[key]);
     currentChatId.value = null;
     query.value = "";
     errorMessage.value = "";
@@ -835,6 +1258,40 @@ function formatTime(timestamp: string) {
     </div>
 </div>
 
+<div v-if="message.role === 'assistant' && pyodideStateForMessage(message)" class="pyodide-status card mt-2">
+    <div class="card-body">
+        <div v-if="pyodideStateForMessage(message)?.status === 'initialising'" class="text-muted">Preparing browser environment…</div>
+        <div v-else-if="pyodideStateForMessage(message)?.status === 'installing'" class="text-muted">Installing Python packages…</div>
+        <div v-else-if="pyodideStateForMessage(message)?.status === 'fetching'" class="text-muted">Downloading datasets…</div>
+        <div v-else-if="pyodideStateForMessage(message)?.status === 'running'" class="text-muted">Running generated Python in the browser…</div>
+        <div v-else-if="pyodideStateForMessage(message)?.status === 'submitting'" class="text-muted">Sending results back to Galaxy…</div>
+        <div v-else-if="pyodideStateForMessage(message)?.status === 'completed'" class="text-success">Execution completed in your browser.</div>
+        <div v-else-if="pyodideStateForMessage(message)?.status === 'error'" class="text-danger">
+            Execution failed{{ pyodideStateForMessage(message)?.errorMessage ? ': ' + pyodideStateForMessage(message)?.errorMessage : '' }}
+        </div>
+
+        <div v-if="pyodideStateForMessage(message)?.stdout" class="mt-2">
+            <h6 class="mb-1">Stdout</h6>
+            <pre class="pyodide-stream">{{ pyodideStateForMessage(message)?.stdout }}</pre>
+        </div>
+        <div v-if="pyodideStateForMessage(message)?.stderr" class="mt-2">
+            <h6 class="mb-1">Stderr</h6>
+            <pre class="pyodide-stream text-danger">{{ pyodideStateForMessage(message)?.stderr }}</pre>
+        </div>
+        <div v-if="pyodideStateForMessage(message)?.artifacts.length" class="mt-2">
+            <h6 class="mb-1">Artifacts</h6>
+            <ul class="list-unstyled mb-0">
+                <li v-for="artifact in pyodideStateForMessage(message)?.artifacts" :key="artifact.dataset_id || artifact.name">
+                    <button class="btn btn-link btn-sm" type="button" @click="downloadArtifact(artifact)">
+                        {{ artifact.name || artifact.dataset_id }}
+                    </button>
+                    <span v-if="artifact.size" class="text-muted ml-1">({{ formatSize(artifact.size) }})</span>
+                </li>
+            </ul>
+        </div>
+    </div>
+</div>
+
 <!-- Action suggestions for assistant messages -->
 <ActionCard
                         v-if="message.role === 'assistant' && message.suggestions?.length"
@@ -1008,6 +1465,26 @@ function formatTime(timestamp: string) {
 
 .analysis-step-body .text-danger {
     color: #dc3545 !important;
+}
+
+.pyodide-status {
+    border: 1px dashed #6c757d;
+    background: #f8f9fa;
+}
+
+.pyodide-status .pyodide-stream {
+    background: #1e1e1e;
+    color: #f8f9fa;
+    padding: 0.5rem;
+    border-radius: 4px;
+    max-height: 200px;
+    overflow: auto;
+    font-family: var(--font-family-monospace);
+    font-size: 0.85rem;
+}
+
+.pyodide-status .pyodide-stream.text-danger {
+    color: #f8d7da;
 }
 
 .step-requirements {
