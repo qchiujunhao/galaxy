@@ -4,27 +4,30 @@ Data Analysis Agent Integration
 This document tracks the in-progress integration of the DSPy-based *Data Analysis
 Agent* into Galaxy. The agent adapts the workflow from the external
 `ChatAnalysis <https://github.com/goeckslab/ChatAnalysis>`_ project to work
-within Galaxy's agent framework, dataset security model, and future Pyodide-based
-execution loop.
+within Galaxy's agent framework, dataset security model, and a browser-based
+Pyodide execution loop.
 
 Current Capabilities
 --------------------
-- Backend provides a ``data_analysis_dspy`` agent that plans with DSPy, generates
-  Python snippets, executes them in Galaxy's local sandbox for now, and feeds a
-  summarized execution transcript back into the planner for iterative reasoning.
+- Backend provides a ``data_analysis_dspy`` agent that plans with DSPy, emits
+  browser-ready execution payloads, and incorporates the resulting stdout, stderr,
+  and artifact summaries into subsequent planning turns.
 - Chat UI surfaces a dataset multi-select control; selected dataset IDs are
-  forwarded with every message and stored in chat history for reconciliation.
-- Execution summaries (stdout/stderr/artifact metadata) are persisted in chat
-  history so subsequent turns and agents can incorporate prior code runs.
+  forwarded with every message, stored in chat history, and translated into
+  downloadable dataset URLs for the Pyodide worker.
+- Execution of generated Python happens automatically in the user's browser;
+  results are posted back to Galaxy and rendered inline (stdout/stderr plus
+  downloadable artifacts).
+- Execution artifacts are uploaded to the user's history with signed download links and appear in the chat transcript.
+- The chat UI maintains a WebSocket stream for automatic follow-ups (and falls back to HTTP when unavailable).
+
 
 Near-Term Work
 --------------
-- Generate presigned dataset URLs so browser sandboxes can read history datasets
-  without exposing raw file paths.
-- Replace local execution with a browser-based Pyodide worker that streams
-  stdout/stderr and returns structured artifacts to Galaxy.
-- Promote large artifacts to Galaxy history items and surface download links.
+- Harden the artifact upload story (size limits, resumable uploads, streaming).
 - Expand unit/integration tests covering dataset resolution, execution result
   persistence, and multi-step DSPy conversations.
+- Provide granular UX around Pyodide errors (package install failures, dataset
+  fetch problems, timeout messaging) and allow user-controlled reruns.
 
-Refer to ``lib/galaxy/agents/plan.md`` for the detailed implementation roadmap.
+Refer to ``lib/galaxy/agents/plan_unused.md`` for the detailed implementation roadmap.

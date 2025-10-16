@@ -223,6 +223,8 @@ class DSPyPlanResult:
 class GalaxyDSPyPlanner:
     """Wrapper that executes the DSPy data analysis plan for Galaxy."""
 
+    _GLOBAL_LM_CONFIGURED: bool = False
+
     def __init__(self, deps):
         if not HAS_DSPY:
             detail = f": {DSPY_IMPORT_ERROR}" if DSPY_IMPORT_ERROR else ""
@@ -483,7 +485,8 @@ class GalaxyDSPyPlanner:
         return requirements
 
     def _configure_lm(self) -> None:
-        if self._lm_configured:
+        if self._lm_configured or GalaxyDSPyPlanner._GLOBAL_LM_CONFIGURED:
+            self._lm_configured = True
             return
 
         model_name = getattr(self._config, "ai_model", None) or "gpt-4o"
@@ -499,6 +502,7 @@ class GalaxyDSPyPlanner:
         lm = dspy.LM(**kwargs)
         dspy.settings.configure(lm=lm, trace=None)
         self._lm_configured = True
+        GalaxyDSPyPlanner._GLOBAL_LM_CONFIGURED = True
 
     def ensure_lm_configured(self) -> None:
         """Ensure the shared DSPy settings are initialized on the current thread."""

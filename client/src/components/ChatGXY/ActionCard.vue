@@ -5,8 +5,8 @@
         </div>
         <div class="action-list">
             <button
-                v-for="action in sortedSuggestions"
-                :key="`${action.action_type}-${action.description}`"
+                v-for="(action, index) in sortedSuggestions"
+                :key="`${action.action_type}-${index}-${action.description}`"
                 class="btn action-button"
                 :class="`btn-${getVariant(action.priority)}`"
                 :disabled="processingAction"

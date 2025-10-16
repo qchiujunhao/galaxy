@@ -57,22 +57,21 @@ def summarize_result(exec_result: Dict[str, Any], *, tail_limit: int = TAIL_DEFA
     }
 
     for artifact in artifacts:
-        path = artifact.get("temp_path") or artifact.get("path")
-        if not path:
-            continue
-        table_summary = None
-        try:
-            table_summary = summarize_table(Path(path))
-        except Exception:
-            table_summary = None
-        summary["artifacts"].append(
-            {
-                "name": artifact.get("name"),
-                "path": path,
-                "mime_type": artifact.get("mime_type"),
-                "size": artifact.get("size"),
-                "table": table_summary,
-            }
-        )
+        artifact_path = artifact.get("temp_path") or artifact.get("path")
+        entry = {
+            "name": artifact.get("name"),
+            "path": artifact_path,
+            "mime_type": artifact.get("mime_type"),
+            "size": artifact.get("size"),
+            "dataset_id": artifact.get("dataset_id"),
+            "download_url": artifact.get("download_url"),
+            "table": None,
+        }
+        if artifact_path:
+            try:
+                entry["table"] = summarize_table(Path(artifact_path))
+            except Exception:
+                entry["table"] = None
+        summary["artifacts"].append(entry)
 
     return summary

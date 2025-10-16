@@ -1,7 +1,10 @@
 """API Controller providing Chat functionality"""
 
+import asyncio
 import json
 import logging
+import mimetypes
+import os
 from typing import (
     Annotated,
     Any,
@@ -13,17 +16,26 @@ from typing import (
 
 from fastapi import (
     Body,
+    File,
+    Form,
+    HTTPException,
     Path,
     Query,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
 )
 from pydantic import BaseModel, Field
+
+from starlette.responses import StreamingResponse
 
 from galaxy.config import GalaxyAppConfiguration
 from galaxy.exceptions import ConfigurationError
 from galaxy.managers.chat import ChatManager
 from galaxy.managers.context import ProvidesUserContext
 from galaxy.managers.jobs import JobManager
-from galaxy.model import User
+from galaxy.model import HistoryDatasetAssociation, User
 from galaxy.schema.agents import (
     AgentListResponse,
     AgentQueryRequest,
@@ -104,6 +116,61 @@ class PyodideResultPayload(BaseModel):
     artifacts: List[Dict[str, Any]] = Field(default_factory=list, description="Artifacts generated during execution")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional execution metadata")
     success: bool = Field(default=True, description="Whether the execution succeeded")
+
+
+def _guess_extension(filename: Optional[str], mime_type: Optional[str]) -> str:
+    """Best-effort guess of an artifact extension based on the provided metadata."""
+
+    if filename and "." in filename:
+        candidate = filename.rsplit(".", 1)[1].strip().lower()
+        if candidate:
+            return candidate
+    if mime_type:
+        guessed = mimetypes.guess_extension(mime_type)
+        if guessed:
+            return guessed.lstrip(".")
+    return "data"
+
+
+
+ACTIVE_EXECUTION_STREAMS: dict[int, set[WebSocket]] = {}
+STREAM_LOCK = asyncio.Lock()
+
+
+async def _register_stream(exchange_id: int, websocket: WebSocket) -> None:
+    async with STREAM_LOCK:
+        ACTIVE_EXECUTION_STREAMS.setdefault(exchange_id, set()).add(websocket)
+
+
+async def _remove_stream(exchange_id: int, websocket: WebSocket) -> None:
+    async with STREAM_LOCK:
+        connections = ACTIVE_EXECUTION_STREAMS.get(exchange_id)
+        if connections and websocket in connections:
+            connections.remove(websocket)
+            if not connections:
+                ACTIVE_EXECUTION_STREAMS.pop(exchange_id, None)
+
+
+async def _broadcast_exec_followup(exchange_id: int, message: Dict[str, Any]) -> None:
+    async with STREAM_LOCK:
+        targets = list(ACTIVE_EXECUTION_STREAMS.get(exchange_id, set()))
+    if not targets:
+        return
+    stale: list[WebSocket] = []
+    for ws in targets:
+        try:
+            await ws.send_json(message)
+        except Exception:
+            stale.append(ws)
+    if stale:
+        async with STREAM_LOCK:
+            connections = ACTIVE_EXECUTION_STREAMS.get(exchange_id)
+            if connections:
+                for ws in stale:
+                    connections.discard(ws)
+                if not connections:
+                    ACTIVE_EXECUTION_STREAMS.pop(exchange_id, None)
+
 
 
 @router.cbv
@@ -432,6 +499,175 @@ class ChatAPI:
 
         return messages
 
+    @router.get("/api/chat/datasets/{dataset_id}/download", response_class=StreamingResponse)
+    async def download_dataset_for_execution(
+        self,
+        dataset_id: str,
+        token: str = Query(..., description="Signed dataset download token"),
+        trans: ProvidesUserContext = DependsOnTrans,
+        user: User = DependsOnUser,
+    ):
+        """Stream a history dataset referenced by a signed execution token."""
+
+        if not token:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing download token")
+
+        try:
+            self.agent_service.verify_dataset_download_token(trans, dataset_id, token)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+        try:
+            decoded_id = trans.security.decode_id(dataset_id)
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found") from exc
+
+        hda_manager = trans.app.hda_manager
+        try:
+            hda = hda_manager.get_accessible(decoded_id, user, current_history=trans.history, trans=trans)
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Dataset is not accessible") from exc
+
+        try:
+            hda_manager.ensure_dataset_on_disk(trans, hda)
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+        dataset = hda.dataset
+        file_path = dataset.get_file_name()
+        if not file_path or not os.path.exists(file_path):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset file not found")
+
+        mime_type = hda.get_mime() or "application/octet-stream"
+        try:
+            display_name = hda.display_name()
+        except Exception:
+            display_name = hda.name or dataset_id
+        safe_name = (display_name or dataset_id).replace('\\', '').replace('"', '')
+        headers = {
+            "Content-Disposition": f'attachment; filename="{safe_name}"',
+            "Content-Length": str(os.path.getsize(file_path)),
+        }
+
+        def iter_file():
+            with open(file_path, "rb") as handle:
+                while True:
+                    chunk = handle.read(65536)
+                    if not chunk:
+                        break
+                    yield chunk
+
+        return StreamingResponse(iter_file(), media_type=mime_type, headers=headers)
+
+    @router.post("/api/chat/exchange/{exchange_id}/artifacts")
+    async def upload_pyodide_artifact(
+        self,
+        exchange_id: int,
+        file: UploadFile = File(...),
+        name: Optional[str] = Form(default=None),
+        mime_type: Optional[str] = Form(default=None),
+        size: Optional[int] = Form(default=None),
+        trans: ProvidesUserContext = DependsOnTrans,
+        user: User = DependsOnUser,
+    ) -> Dict[str, Any]:
+        """Persist an artifact generated by the Pyodide worker as a history dataset."""
+
+        if not user:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Authentication required")
+
+        exchange = self.chat_manager.get_exchange_by_id(trans, exchange_id)
+        if not exchange:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat exchange not found")
+
+        history = trans.history
+        if history is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No active history available")
+
+        raw_bytes = await file.read()
+        if not raw_bytes:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Artifact contains no data")
+
+        artifact_name = name or file.filename or "artifact"
+        artifact_mime = mime_type or file.content_type or "application/octet-stream"
+        artifact_size = size or len(raw_bytes)
+
+        extension = _guess_extension(artifact_name, artifact_mime)
+
+        hda = HistoryDatasetAssociation(
+            history=history,
+            name=artifact_name,
+            extension=extension,
+            create_dataset=True,
+            sa_session=trans.sa_session,
+        )
+        trans.sa_session.add(hda)
+        history.add_dataset(hda, set_hid=True)
+
+        permissions = trans.app.security_agent.history_get_default_permissions(history)
+        trans.app.security_agent.set_all_dataset_permissions(hda.dataset, permissions, new=True, flush=False)
+
+        dataset = hda.dataset
+        file_path = dataset.get_file_name()
+        try:
+            with open(file_path, "wb") as handle:
+                handle.write(raw_bytes)
+        except Exception:
+            trans.sa_session.rollback()
+            raise
+
+        hda.state = hda.states.OK
+        try:
+            hda.set_size()
+            hda.set_total_size()
+        except Exception:
+            pass
+        try:
+            hda.set_meta()
+        except Exception:
+            pass
+        try:
+            hda.set_peek()
+        except Exception:
+            pass
+
+        trans.sa_session.flush()
+        trans.sa_session.commit()
+
+        encoded_dataset_id = trans.security.encode_id(hda.id)
+        download_url = self.agent_service._dataset_download_url(trans, encoded_dataset_id)
+
+        return {
+            "dataset_id": encoded_dataset_id,
+            "history_id": trans.security.encode_id(history.id),
+            "name": artifact_name,
+            "mime_type": artifact_mime,
+            "size": artifact_size,
+            "download_url": download_url,
+        }
+
+
+    @router.websocket("/api/chat/exchange/{exchange_id}/stream")
+    async def chat_exchange_stream(
+        self,
+        exchange_id: int,
+        websocket: WebSocket,
+    ) -> None:
+        await websocket.accept()
+        await _register_stream(exchange_id, websocket)
+        try:
+            while True:
+                try:
+                    message = await websocket.receive_text()
+                except WebSocketDisconnect:
+                    break
+                if message and message.lower().startswith("ping"):
+                    await websocket.send_text("pong")
+        except WebSocketDisconnect:
+            pass
+        finally:
+            await _remove_stream(exchange_id, websocket)
+
+
     @router.post("/api/chat/exchange/{exchange_id}/pyodide_result")
     async def submit_pyodide_result(
         self,
@@ -543,13 +779,26 @@ class ChatAPI:
             payload.success,
         )
 
-        return {
+        response_payload = {
             "message": "Execution result stored",
             "response": followup_response.get("content", ""),
             "agent_response": followup_response,
             "dataset_ids": dataset_ids,
             "exchange_id": exchange_id,
+            "task_id": payload.task_id,
         }
+
+        await _broadcast_exec_followup(
+            exchange_id,
+            {
+                "type": "exec_followup",
+                "exchange_id": exchange_id,
+                "task_id": payload.task_id,
+                "payload": response_payload,
+            },
+        )
+
+        return response_payload
 
     def _ensure_ai_configured(self):
         """Ensure AI libraries are available and configured"""
