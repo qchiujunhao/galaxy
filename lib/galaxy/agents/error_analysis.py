@@ -124,29 +124,22 @@ class ErrorAnalysisAgent(BaseGalaxyAgent):
             return {"error": f"Failed to retrieve job details: {str(e)}"}
 
     async def get_tool_info(self, tool_id: str) -> Dict[str, Any]:
-        """
-        Get tool metadata and documentation.
+        """Get tool metadata and documentation."""
+        if not self.deps.toolbox:
+            return {"error": "Toolbox not available"}
 
-        Args:
-            tool_id: Galaxy tool identifier
-
-        Returns:
-            Dictionary with tool information
-        """
         try:
-            if not self.deps.tool_cache:
-                return {"error": "Tool cache not available"}
+            tool = self.deps.toolbox.get_tool(tool_id)
+            if not tool:
+                return {"error": "Tool not found"}
 
-            # This would need to be implemented based on Galaxy's tool cache
-            # For now, return basic structure
             return {
-                "tool_id": tool_id,
-                "name": tool_id,  # Placeholder
-                "version": "unknown",
-                "description": "Tool information not available",
-                "requirements": [],
-                "parameters": {},
-                "help_text": "",
+                "tool_id": tool.id,
+                "name": tool.name,
+                "version": tool.version,
+                "description": tool.description or "",
+                "requirements": [str(r) for r in tool.requirements] if hasattr(tool, "requirements") else [],
+                "help_text": tool.raw_help[:500] if hasattr(tool, "raw_help") and tool.raw_help else "",
             }
         except Exception as e:
             log.error(f"Error getting tool info for {tool_id}: {e}")
@@ -154,19 +147,16 @@ class ErrorAnalysisAgent(BaseGalaxyAgent):
 
     async def search_error_patterns(self, error_text: str) -> List[Dict[str, Any]]:
         """
-        Search for similar error patterns in knowledge base.
+        Search for similar error patterns using keyword-based heuristics.
 
         Args:
             error_text: Error message to search for
 
         Returns:
-            List of similar error patterns with solutions
+            List of matching error patterns with solutions
         """
         try:
-            # This would integrate with a real error pattern database
-            # For now, return some common patterns based on keywords
             patterns = []
-
             error_lower = error_text.lower()
 
             if "memory" in error_lower or "out of memory" in error_lower:
