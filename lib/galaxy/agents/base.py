@@ -161,8 +161,7 @@ class BaseGalaxyAgent(ABC):
                 last_exception = e
                 error_msg = str(e).lower()
 
-                # A fairly generic list of retryable network errors.
-                # TODO: Make this more specific to the underlying provider's exceptions.
+                # Generic retry indicators for network errors across providers.
                 is_retryable = any(
                     indicator in error_msg
                     for indicator in [

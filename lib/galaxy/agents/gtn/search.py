@@ -72,10 +72,7 @@ def sanitize_fts5_query(query: str, preserve_phrases: bool = True) -> str:
     # Handle quotes based on preserve_phrases setting
     if not preserve_phrases:
         sanitized = sanitized.replace('"', " ")  # Remove all quotes
-    else:
-        # TODO: Could add logic here to fix unmatched quotes
-        # For now, keep quotes as-is for phrase matching
-        pass
+    # else: keep quotes as-is for phrase matching
 
     # Handle asterisks - remove them unless they're clearly meant for prefix matching
     # Simple heuristic: keep * only if it's at the end of a word
