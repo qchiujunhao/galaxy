@@ -6,6 +6,7 @@ Agents provide specialized assistance for workflows, tool errors, data quality, 
 """
 
 from .base import (
+    AgentType,
     BaseGalaxyAgent,
     GalaxyAgentDependencies,
 )
@@ -19,6 +20,7 @@ from .router import QueryRouterAgent
 from .tools import ToolRecommendationAgent
 
 __all__ = [
+    "AgentType",
     "BaseGalaxyAgent",
     "GalaxyAgentDependencies",
     "AgentRegistry",
@@ -35,10 +37,10 @@ __all__ = [
 agent_registry = AgentRegistry()
 
 # Register default agents
-agent_registry.register("router", QueryRouterAgent)
-agent_registry.register("error_analysis", ErrorAnalysisAgent)
-agent_registry.register("tool_recommendation", ToolRecommendationAgent)
-agent_registry.register("custom_tool", CustomToolAgent)
-agent_registry.register("gtn_training", GTNTrainingAgent)
-agent_registry.register("orchestrator", WorkflowOrchestratorAgent)
-agent_registry.register("dspy_tool_recommendation", DSPyGalaxyAgent)
+agent_registry.register(AgentType.ROUTER, QueryRouterAgent)
+agent_registry.register(AgentType.ERROR_ANALYSIS, ErrorAnalysisAgent)
+agent_registry.register(AgentType.TOOL_RECOMMENDATION, ToolRecommendationAgent)
+agent_registry.register(AgentType.CUSTOM_TOOL, CustomToolAgent)
+agent_registry.register(AgentType.GTN_TRAINING, GTNTrainingAgent)
+agent_registry.register(AgentType.ORCHESTRATOR, WorkflowOrchestratorAgent)
+agent_registry.register(AgentType.DSPY_TOOL_RECOMMENDATION, DSPyGalaxyAgent)
