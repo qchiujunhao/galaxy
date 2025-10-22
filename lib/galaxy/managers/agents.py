@@ -49,11 +49,13 @@ class AgentService:
 
     def create_dependencies(self, trans: ProvidesUserContext, user: User) -> GalaxyAgentDependencies:
         """Create agent dependencies for dependency injection."""
+        toolbox = trans.app.toolbox if hasattr(trans, "app") and hasattr(trans.app, "toolbox") else None
         return GalaxyAgentDependencies(
             trans=trans,
             user=user,
             config=self.config,
             job_manager=self.job_manager,
+            toolbox=toolbox,
         )
 
     async def execute_agent(

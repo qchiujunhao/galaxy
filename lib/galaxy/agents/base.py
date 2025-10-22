@@ -99,6 +99,7 @@ class GalaxyAgentDependencies:
     dataset_manager: Optional[Any] = None
     workflow_manager: Optional[Any] = None
     tool_cache: Optional[Any] = None
+    toolbox: Optional[Any] = None
 
 
 class BaseGalaxyAgent(ABC):
