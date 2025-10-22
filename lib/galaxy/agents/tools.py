@@ -9,6 +9,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    Union,
 )
 
 from pydantic import (
@@ -38,7 +39,7 @@ class SimplifiedToolRecommendationResult(BaseModel):
     alternative_tools: List[Dict[str, Any]] = []
     workflow_suggestion: Optional[str] = None
     parameter_guidance: Dict[str, Any] = {}
-    confidence: str  # "low", "medium", or "high"
+    confidence: Union[str, ConfidenceLevel]  # "low", "medium", or "high"
     reasoning: str
     search_keywords: List[str] = []
 

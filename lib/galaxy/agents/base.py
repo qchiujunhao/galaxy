@@ -55,7 +55,7 @@ class AgentResponse:
     def __init__(
         self,
         content: str,
-        confidence: str,
+        confidence: Union[str, ConfidenceLevel],
         agent_type: str,
         suggestions: List[ActionSuggestion] = None,
         metadata: Dict[str, Any] = None,
@@ -443,7 +443,7 @@ class SimpleGalaxyAgent(BaseGalaxyAgent):
             },
         )
 
-    def _extract_confidence(self, content: str) -> ConfidenceLevel:
+    def _extract_confidence(self, content: str) -> Union[str, ConfidenceLevel]:
         """Extract confidence level from response content."""
         content_lower = content.lower()
 
