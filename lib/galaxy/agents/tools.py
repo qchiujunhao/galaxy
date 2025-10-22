@@ -94,130 +94,29 @@ class ToolRecommendationAgent(BaseGalaxyAgent):
         """
 
     async def search_tools(self, query: str, category: Optional[str] = None) -> List[Dict[str, Any]]:
-        """
-        Search for tools in the Galaxy toolbox.
+        """Search for tools in the Galaxy toolbox."""
+        if not self.deps.toolbox:
+            log.warning("Toolbox not available in agent dependencies")
+            return []
 
-        Args:
-            query: Search keywords or description
-            category: Optional category filter
-
-        Returns:
-            List of matching tools with metadata
-        """
         try:
-            # This would integrate with Galaxy's tool search
-            # For now, return mock data based on common patterns
+            # Get the default panel view (usually 'default')
+            panel_view = self.deps.config.default_panel_view or "default"
+
+            # Use Galaxy's built-in tool search
+            tool_ids = self.deps.toolbox.search(query, panel_view, self.deps.config)
+
+            # Get tool details for found tools
             tools = []
-
-            query_lower = query.lower()
-
-            # Mock tool database - in reality this would query Galaxy's toolbox
-            mock_tools = [
-                # Text processing
-                {
-                    "id": "Cut1",
-                    "name": "Cut",
-                    "category": "Text Manipulation",
-                    "description": "Select columns from a dataset",
-                    "formats": ["tabular", "txt"],
-                },
-                {
-                    "id": "Filter1",
-                    "name": "Filter",
-                    "category": "Text Manipulation",
-                    "description": "Filter data on any column using simple expressions",
-                    "formats": ["tabular"],
-                },
-                {
-                    "id": "sort1",
-                    "name": "Sort",
-                    "category": "Text Manipulation",
-                    "description": "Sort data in ascending or descending order",
-                    "formats": ["tabular"],
-                },
-                # NGS tools
-                {
-                    "id": "bwa",
-                    "name": "BWA",
-                    "category": "NGS: Mapping",
-                    "description": "Map sequencing reads to reference genome",
-                    "formats": ["fastq", "fasta"],
-                },
-                {
-                    "id": "bowtie2",
-                    "name": "Bowtie2",
-                    "category": "NGS: Mapping",
-                    "description": "Fast and sensitive read alignment",
-                    "formats": ["fastq", "fasta"],
-                },
-                {
-                    "id": "fastqc",
-                    "name": "FastQC",
-                    "category": "NGS: QC",
-                    "description": "Quality control checks on raw sequence data",
-                    "formats": ["fastq", "bam", "sam"],
-                },
-                # Variant calling
-                {
-                    "id": "freebayes",
-                    "name": "FreeBayes",
-                    "category": "Variant Calling",
-                    "description": "Bayesian haplotype-based variant detection",
-                    "formats": ["bam"],
-                },
-                {
-                    "id": "bcftools_call",
-                    "name": "bcftools call",
-                    "category": "Variant Calling",
-                    "description": "SNP/indel variant calling from VCF/BCF",
-                    "formats": ["bcf", "vcf"],
-                },
-                # RNA-seq
-                {
-                    "id": "hisat2",
-                    "name": "HISAT2",
-                    "category": "RNA-seq",
-                    "description": "Fast and sensitive alignment for RNA-seq",
-                    "formats": ["fastq"],
-                },
-                {
-                    "id": "featurecounts",
-                    "name": "featureCounts",
-                    "category": "RNA-seq",
-                    "description": "Count reads in features",
-                    "formats": ["bam", "sam"],
-                },
-                {
-                    "id": "deseq2",
-                    "name": "DESeq2",
-                    "category": "RNA-seq",
-                    "description": "Differential gene expression analysis",
-                    "formats": ["tabular"],
-                },
-            ]
-
-            # Filter by query
-            for tool in mock_tools:
-                if query_lower in tool["name"].lower() or query_lower in tool["description"].lower():
-                    if not category or category.lower() in tool["category"].lower():
-                        tools.append(tool)
-
-            # Also check for task-based queries
-            task_mappings = {
-                "align": ["bwa", "bowtie2", "hisat2"],
-                "quality": ["fastqc"],
-                "variant": ["freebayes", "bcftools_call"],
-                "expression": ["featurecounts", "deseq2"],
-                "filter": ["Filter1"],
-                "sort": ["sort1"],
-                "column": ["Cut1"],
-            }
-
-            for task, tool_ids in task_mappings.items():
-                if task in query_lower:
-                    for tool in mock_tools:
-                        if tool["id"] in tool_ids and tool not in tools:
-                            tools.append(tool)
+            for tool_id in tool_ids[:20]:  # Limit to top 20 results
+                tool = self.deps.toolbox.get_tool(tool_id)
+                if tool and not tool.hidden:
+                    tools.append({
+                        "id": tool.id,
+                        "name": tool.name,
+                        "description": tool.description or "",
+                        "category": tool.get_panel_section()[1] or "",
+                    })
 
             return tools
 
@@ -226,79 +125,46 @@ class ToolRecommendationAgent(BaseGalaxyAgent):
             return []
 
     async def get_tool_details(self, tool_id: str) -> Dict[str, Any]:
-        """
-        Get detailed information about a specific tool.
+        """Get detailed information about a specific tool."""
+        if not self.deps.toolbox:
+            return {"id": tool_id, "error": "Toolbox not available"}
 
-        Args:
-            tool_id: Galaxy tool identifier
-
-        Returns:
-            Detailed tool information
-        """
         try:
-            # This would fetch from Galaxy's tool cache
-            # Mock implementation for demonstration
-            tool_details = {
-                "bwa": {
-                    "id": "bwa",
-                    "name": "BWA",
-                    "version": "0.7.17",
-                    "description": "Burrows-Wheeler Alignment tool for mapping sequences against a large reference genome",
-                    "inputs": [
-                        {"name": "fastq_input", "type": "data", "format": "fastqsanger,fastq"},
-                        {"name": "reference", "type": "data", "format": "fasta"},
-                    ],
-                    "outputs": [{"name": "output", "type": "data", "format": "sam"}],
-                    "parameters": {
-                        "algorithm": ["mem", "aln", "samse", "sampe"],
-                        "threads": "integer (default: 1)",
-                        "min_seed_length": "integer (default: 19)",
-                    },
-                    "requirements": ["bwa", "samtools"],
-                    "citations": ["PMID: 19451168", "PMID: 20080505"],
-                },
-                "fastqc": {
-                    "id": "fastqc",
-                    "name": "FastQC",
-                    "version": "0.11.9",
-                    "description": "Quality control tool for high throughput sequence data",
-                    "inputs": [{"name": "input_file", "type": "data", "format": "fastqsanger,fastq,bam,sam"}],
-                    "outputs": [
-                        {"name": "html_file", "type": "data", "format": "html"},
-                        {"name": "text_file", "type": "data", "format": "txt"},
-                    ],
-                    "parameters": {
-                        "contaminants": "optional file",
-                        "adapters": "optional file",
-                        "limits": "optional file",
-                    },
-                    "requirements": ["fastqc"],
-                    "citations": [],
-                },
-                "deseq2": {
-                    "id": "deseq2",
-                    "name": "DESeq2",
-                    "version": "1.32.0",
-                    "description": "Differential gene expression analysis based on the negative binomial distribution",
-                    "inputs": [
-                        {"name": "counts", "type": "data", "format": "tabular"},
-                        {"name": "sample_table", "type": "data", "format": "tabular"},
-                    ],
-                    "outputs": [
-                        {"name": "results", "type": "data", "format": "tabular"},
-                        {"name": "plots", "type": "data", "format": "pdf"},
-                    ],
-                    "parameters": {
-                        "alpha": "float (default: 0.1)",
-                        "test": ["Wald", "LRT"],
-                        "fitType": ["parametric", "local", "mean"],
-                    },
-                    "requirements": ["bioconductor-deseq2"],
-                    "citations": ["PMID: 25516281"],
-                },
+            tool = self.deps.toolbox.get_tool(tool_id)
+            if not tool:
+                return {"id": tool_id, "error": "Tool not found"}
+
+            # Build comprehensive tool details
+            details = {
+                "id": tool.id,
+                "name": tool.name,
+                "version": tool.version,
+                "description": tool.description or "",
+                "category": tool.get_panel_section()[1] or "",
+                "requirements": [str(r) for r in tool.requirements] if hasattr(tool, "requirements") else [],
             }
 
-            return tool_details.get(tool_id, {"id": tool_id, "error": "Tool details not available"})
+            # Add input information
+            if hasattr(tool, "inputs"):
+                details["inputs"] = []
+                for input_name, input_param in tool.inputs.items():
+                    if hasattr(input_param, "type"):
+                        details["inputs"].append({
+                            "name": input_name,
+                            "type": input_param.type,
+                            "label": getattr(input_param, "label", input_name),
+                        })
+
+            # Add output information
+            if hasattr(tool, "outputs"):
+                details["outputs"] = []
+                for output_name, output_param in tool.outputs.items():
+                    details["outputs"].append({
+                        "name": output_name,
+                        "format": getattr(output_param, "format", "unknown"),
+                    })
+
+            return details
 
         except Exception as e:
             log.error(f"Error getting tool details for {tool_id}: {e}")
@@ -513,7 +379,6 @@ class ToolRecommendationAgent(BaseGalaxyAgent):
         if recommendation.primary_tools:
             parts.append("**Recommended Tools:**")
             for i, tool in enumerate(recommendation.primary_tools[:3], 1):
-                # Handle both mock data format (name/id) and potential real tool format (tool_name/tool_id)
                 tool_name = tool.get("name", tool.get("tool_name", "Unknown"))
                 tool_id = tool.get("id", tool.get("tool_id", "unknown"))
                 parts.append(f"\n{i}. **{tool_name}** (ID: `{tool_id}`)")
