@@ -47,6 +47,19 @@ except ImportError:
 log = logging.getLogger(__name__)
 
 
+# Agent type constants
+class AgentType:
+    """Constants for registered agent types."""
+
+    ROUTER = "router"
+    ERROR_ANALYSIS = "error_analysis"
+    TOOL_RECOMMENDATION = "tool_recommendation"
+    CUSTOM_TOOL = "custom_tool"
+    GTN_TRAINING = "gtn_training"
+    ORCHESTRATOR = "orchestrator"
+    DSPY_TOOL_RECOMMENDATION = "dspy_tool_recommendation"
+
+
 # Internal agent response model (simplified for internal use)
 # For API responses, use galaxy.schema.agents.AgentResponse
 class AgentResponse:
