@@ -8,6 +8,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    Union,
 )
 
 from pydantic import BaseModel
@@ -34,7 +35,7 @@ class ErrorAnalysisResult(BaseModel):
     likely_cause: str
     solution_steps: List[str]
     alternative_approaches: List[str] = []
-    confidence: str  # "low", "medium", or "high"
+    confidence: Union[str, ConfidenceLevel]  # "low", "medium", or "high"
     related_documentation: List[str] = []
     requires_admin: bool = False
 

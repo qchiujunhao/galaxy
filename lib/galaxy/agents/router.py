@@ -7,6 +7,7 @@ from typing import (
     Any,
     Dict,
     List,
+    Union,
 )
 
 from pydantic import BaseModel
@@ -30,7 +31,7 @@ class RoutingDecision(BaseModel):
     primary_agent: str
     secondary_agents: List[str] = []
     complexity: str  # "simple" or "complex"
-    confidence: str  # Use str instead of enum: "low", "medium", or "high"
+    confidence: Union[str, ConfidenceLevel]  # "low", "medium", or "high"
     reasoning: str
     direct_response: str = ""  # If router can answer directly
 
