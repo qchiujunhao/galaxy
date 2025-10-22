@@ -21,10 +21,13 @@ from typing import (
     Union,
 )
 
-from pydantic import BaseModel
-
 from galaxy.managers.context import ProvidesUserContext
 from galaxy.model import User
+from galaxy.schema.agents import (
+    ActionSuggestion,
+    ActionType,
+    ConfidenceLevel,
+)
 
 # Try to import pydantic-ai components
 try:
@@ -44,47 +47,26 @@ except ImportError:
 log = logging.getLogger(__name__)
 
 
-class ConfidenceLevel(str, Enum):
-    """Confidence levels for agent responses."""
+# Internal agent response model (simplified for internal use)
+# For API responses, use galaxy.schema.agents.AgentResponse
+class AgentResponse:
+    """Internal agent response structure."""
 
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-
-
-class ActionType(str, Enum):
-    """Types of actions agents can suggest."""
-
-    TOOL_RUN = "tool_run"
-    PARAMETER_CHANGE = "parameter_change"
-    WORKFLOW_STEP = "workflow_step"
-    DOCUMENTATION = "documentation"
-    CONTACT_SUPPORT = "contact_support"
-    VIEW_EXTERNAL = "view_external"  # Open external URL in new tab
-    SAVE_TOOL = "save_tool"
-    TEST_TOOL = "test_tool"
-    REFINE_QUERY = "refine_query"
-
-
-class ActionSuggestion(BaseModel):
-    """Structured suggestion for user action."""
-
-    action_type: ActionType
-    description: str
-    parameters: Dict[str, Any] = {}
-    confidence: str  # "low", "medium", or "high"
-    priority: int = 1  # 1=high, 2=medium, 3=low
-
-
-class AgentResponse(BaseModel):
-    """Structured response from an AI agent."""
-
-    content: str
-    confidence: str  # "low", "medium", or "high"
-    agent_type: str
-    suggestions: List[ActionSuggestion] = []
-    metadata: Dict[str, Any] = {}
-    reasoning: Optional[str] = None
+    def __init__(
+        self,
+        content: str,
+        confidence: str,
+        agent_type: str,
+        suggestions: List[ActionSuggestion] = None,
+        metadata: Dict[str, Any] = None,
+        reasoning: Optional[str] = None,
+    ):
+        self.content = content
+        self.confidence = confidence
+        self.agent_type = agent_type
+        self.suggestions = suggestions or []
+        self.metadata = metadata or {}
+        self.reasoning = reasoning
 
 
 @dataclass
