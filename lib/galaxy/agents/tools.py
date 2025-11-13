@@ -104,8 +104,9 @@ class ToolRecommendationAgent(BaseGalaxyAgent):
             # Get the default panel view (usually 'default')
             panel_view = self.deps.config.default_panel_view or "default"
 
-            # Use Galaxy's built-in tool search
-            tool_ids = self.deps.toolbox.search(query, panel_view, self.deps.config)
+            # Use Galaxy's built-in tool search via the app's toolbox_search
+            toolbox_search = self.deps.trans.app.toolbox_search
+            tool_ids = toolbox_search.search(query, panel_view, self.deps.config)
 
             # Get tool details for found tools
             tools = []
