@@ -216,6 +216,11 @@ async function installPackages(py: any, packages: string[], id: string) {
         return;
     }
 
+    try {
+        await py.loadPackage("micropip");
+    } catch (err) {
+        // Ignore if already available
+    }
     await py.runPythonAsync("import micropip");
     const jsonPackages = JSON.stringify(micropipTargets);
     await py.runPythonAsync(`import micropip\nawait micropip.install(${jsonPackages})`);
@@ -291,7 +296,7 @@ async function seedPythonEnvironment(py: any, datasets: Array<{ id: string; name
     py.globals.set("_GXY_DATASETS_JSON", datasetJson);
     py.globals.set("_GXY_ALIAS_JSON", aliasJson);
     await py.runPythonAsync(
-        `import json\nfrom pathlib import Path\nimport builtins as _gxy_builtins\n\ntry:\n    _DATASET_ENTRIES = json.loads(globals().pop("_GXY_DATASETS_JSON"))\nexcept KeyError:\n    _DATASET_ENTRIES = []\n\ntry:\n    _ALIAS_MAP = json.loads(globals().pop("_GXY_ALIAS_JSON"))\nexcept KeyError:\n    _ALIAS_MAP = {}\n\n_DATASET_INDEX = {}\nfor entry in _DATASET_ENTRIES:\n    aliases = entry.get("aliases") or []\n    for alias in aliases:\n        if alias:\n            _DATASET_INDEX[alias] = entry\n    dataset_id = entry.get("id")\n    if dataset_id:\n        _DATASET_INDEX.setdefault(dataset_id, entry)\n\nfor alias, path in _ALIAS_MAP.items():\n    existing = _DATASET_INDEX.get(alias)\n    if isinstance(existing, dict):\n        existing.setdefault("path", path)\n        existing.setdefault("name", alias)\n    else:\n        _DATASET_INDEX[alias] = {\"path\": path, \"name\": alias}\n\noutputs_root = Path("/tmp/galaxy")\noutputs_dir = outputs_root / "outputs_dir"\noutputs_dir.mkdir(parents=True, exist_ok=True)\n\n_original_open = _gxy_builtins.open\n\ndef _resolve_dataset(alias: str):\n    key = alias or \"\"\n    entry = _DATASET_INDEX.get(key)\n    if entry is None:\n        raise KeyError(f\"Unknown dataset alias: {alias}\")\n    return entry\n\ndef get_dataset_path(alias: str) -> str:\n    return _resolve_dataset(alias)[\"path\"]\n\ndef load_dataset(alias: str, **read_kwargs):\n    entry = _resolve_dataset(alias)\n    path = entry[\"path\"]\n    import pandas as pd\n    name = entry.get(\"name\") or \"\"\n    if not read_kwargs and (name.lower().endswith(\".tsv\") or path.lower().endswith(\".tsv\")):\n        read_kwargs.setdefault(\"sep\", \"\\t\")\n    return pd.read_csv(path, **read_kwargs)\n\ndef _open_with_alias(path, *args, **kwargs):\n    if isinstance(path, str) and path in _DATASET_INDEX:\n        return _original_open(_DATASET_INDEX[path][\"path\"], *args, **kwargs)\n    return _original_open(path, *args, **kwargs)\n\n_gxy_builtins.open = _open_with_alias\n\nglobals()[\"_GXY_ORIGINAL_LOAD_DATASET\"] = load_dataset\nglobals()[\"_GXY_ORIGINAL_GET_DATASET_PATH\"] = get_dataset_path\n`
+        `import json\nfrom pathlib import Path\nimport builtins as _gxy_builtins\n\ntry:\n    _DATASET_ENTRIES = json.loads(globals().pop("_GXY_DATASETS_JSON"))\nexcept KeyError:\n    _DATASET_ENTRIES = []\n\ntry:\n    globals().pop("_GXY_ALIAS_JSON")\nexcept KeyError:\n    pass\n\n_DATASET_INDEX = {}\nfor entry in _DATASET_ENTRIES:\n    aliases = entry.get("aliases") or []\n    for alias in aliases:\n        if alias:\n            _DATASET_INDEX[alias] = entry\n    dataset_id = entry.get("id")\n    if dataset_id:\n        _DATASET_INDEX.setdefault(dataset_id, entry)\n\noutputs_root = Path("/tmp/galaxy")\noutputs_dir = outputs_root / "outputs_dir"\noutputs_dir.mkdir(parents=True, exist_ok=True)\ngenerated_dir = outputs_dir / "generated_file"\ngenerated_dir.mkdir(parents=True, exist_ok=True)\n\nalias_dir = Path("generated_file")\nif not alias_dir.exists():\n    try:\n        alias_dir.symlink_to(generated_dir)\n    except Exception:\n        if not alias_dir.exists():\n            alias_dir.mkdir(parents=True, exist_ok=True)\n\n_original_open = globals().get("_GXY_ORIGINAL_OPEN")\nif _original_open is None:\n    _original_open = _gxy_builtins.open\n    globals()[\"_GXY_ORIGINAL_OPEN\"] = _original_open\n\n\ndef _resolve_dataset(alias: str):\n    key = alias or \"\"\n    entry = _DATASET_INDEX.get(key)\n    if entry is None:\n        raise KeyError(f\"Unknown dataset alias: {alias}\")\n    return entry\n\ndef get_dataset_path(alias: str) -> str:\n    return _resolve_dataset(alias)[\"path\"]\n\ndef load_dataset(alias: str, **read_kwargs):\n    entry = _resolve_dataset(alias)\n    path = entry[\"path\"]\n    import pandas as pd\n    name = entry.get(\"name\") or \"\"\n    if not read_kwargs and (name.lower().endswith(\".tsv\") or path.lower().endswith(\".tsv\")):\n        read_kwargs.setdefault(\"sep\", \"\\t\")\n    return pd.read_csv(path, **read_kwargs)\n\ndef _open_with_alias(path, *args, **kwargs):\n    if isinstance(path, str) and path in _DATASET_INDEX:\n        return _original_open(_DATASET_INDEX[path][\"path\"], *args, **kwargs)\n    return _original_open(path, *args, **kwargs)\n\n_gxy_builtins.open = _open_with_alias\n\nglobals()[\"_GXY_ORIGINAL_LOAD_DATASET\"] = load_dataset\nglobals()[\"_GXY_ORIGINAL_GET_DATASET_PATH\"] = get_dataset_path\n`
     );
 }
 
@@ -321,7 +326,14 @@ async function runUserCode(py: any, code: string): Promise<{ success: boolean; e
     } finally {
         try {
             await py.runPythonAsync(
-                "load_dataset = globals().get('_GXY_ORIGINAL_LOAD_DATASET', load_dataset)\nget_dataset_path = globals().get('_GXY_ORIGINAL_GET_DATASET_PATH', get_dataset_path)"
+                [
+                    "import builtins as _gxy_builtins",
+                    "original_open = globals().get('_GXY_ORIGINAL_OPEN')",
+                    "if original_open is not None:",
+                    "    _gxy_builtins.open = original_open",
+                    "load_dataset = globals().get('_GXY_ORIGINAL_LOAD_DATASET', load_dataset)",
+                    "get_dataset_path = globals().get('_GXY_ORIGINAL_GET_DATASET_PATH', get_dataset_path)",
+                ].join("\n")
             );
         } catch (restoreError) {
             // ignore restoration issues

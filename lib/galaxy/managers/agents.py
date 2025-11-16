@@ -8,6 +8,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    TYPE_CHECKING,
 )
 from urllib.parse import urlencode
 
@@ -27,13 +28,14 @@ from galaxy.model import User
 
 # Import agent system
 try:
+    # Note: DSPy data analysis agent temporarily disabled; keep import commented.
     from galaxy.agents import (
         agent_registry,
         GalaxyAgentDependencies,
         DataAnalysisAgent,
-        DataAnalysisDSPyAgent,
+        # DataAnalysisDSPyAgent,
     )
-    from galaxy.agents.dspy_adapter import DSPyPlanResult
+    # from galaxy.agents.dspy_adapter import DSPyPlanResult
     from galaxy.agents.error_analysis import ErrorAnalysisAgent
     from galaxy.agents.router import QueryRouterAgent
 
@@ -44,6 +46,13 @@ except ImportError:
     GalaxyAgentDependencies = None
     QueryRouterAgent = None
     ErrorAnalysisAgent = None
+
+if TYPE_CHECKING:
+    from galaxy.agents.data_analysis_dspy_agent import DataAnalysisDSPyAgent  # pragma: no cover
+    from galaxy.agents.dspy_adapter import DSPyPlanResult  # pragma: no cover
+else:  # pragma: no cover - provide dummies when DSPy agent disabled
+    DataAnalysisDSPyAgent = Any  # type: ignore[assignment]
+    DSPyPlanResult = Any  # type: ignore[assignment]
 
 log = logging.getLogger(__name__)
 
@@ -102,9 +111,9 @@ class AgentService:
         try:
             log.info(f"Executing {agent_type} agent for query: '{query[:100]}...'")
             agent = agent_registry.get_agent(agent_type, deps)
-
-            if isinstance(agent, DataAnalysisDSPyAgent):
-                return await self._execute_data_analysis_dspy(agent, query, context or {})
+            # Temporarily disable DSPy agent execution path until the agent is fixed.
+            # if isinstance(agent, DataAnalysisDSPyAgent):
+            #     return await self._execute_data_analysis_dspy(agent, query, context or {})
 
             response = await agent.process(query, context)
 

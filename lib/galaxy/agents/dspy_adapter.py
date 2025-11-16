@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -224,6 +225,11 @@ class GalaxyDSPyPlanner:
     """Wrapper that executes the DSPy data analysis plan for Galaxy."""
 
     _GLOBAL_LM_CONFIGURED: bool = False
+    _PACKAGE_HINTS: ClassVar[List[tuple[str, str]]] = [
+        ("matplotlib", r"\bmatplotlib\b|\bplt\."),
+        ("seaborn", r"\bseaborn\b|\bsns\."),
+        ("plotly", r"\bplotly\b"),
+    ]
 
     def __init__(self, deps):
         if not HAS_DSPY:
@@ -482,7 +488,14 @@ class GalaxyDSPyPlanner:
                     if cleaned and cleaned not in requirements:
                         requirements.append(cleaned)
                 break
-        return requirements
+        inferred = set(requirements)
+        for package, pattern in self._PACKAGE_HINTS:
+            try:
+                if re.search(pattern, code, flags=re.IGNORECASE):
+                    inferred.add(package)
+            except re.error:
+                continue
+        return sorted(inferred)
 
     def _configure_lm(self) -> None:
         if self._lm_configured or GalaxyDSPyPlanner._GLOBAL_LM_CONFIGURED:
