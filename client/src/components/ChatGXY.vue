@@ -120,7 +120,7 @@ const agentTypes = [
     { value: "dspy_tool_recommendation", label: "🤖 DSPy Tools", description: "Advanced reasoning for tool selection" },
     { value: "custom_tool", label: "⚡ Custom Tool", description: "Create custom tools" },
     { value: "data_analysis", label: "🧪 Data Analysis", description: "Explore datasets with generated code" },
-    { value: "data_analysis_dspy", label: "📊 Data Analysis (DSPy)", description: "Iterative planning with DSPy + auto code execution" },
+    // { value: "data_analysis_dspy", label: "📊 Data Analysis (DSPy)", description: "Iterative planning with DSPy + auto code execution" },
     { value: "gtn_training", label: "📚 Training Materials", description: "Find tutorials and guides" },
 ];
 
@@ -175,6 +175,19 @@ function getLatestUserQuery(): string {
         }
     }
     return '';
+}
+
+function isLatestAssistantMessage(message: Message): boolean {
+    if (message.role !== "assistant") {
+        return false;
+    }
+    for (let i = messages.value.length - 1; i >= 0; i -= 1) {
+        const candidate = messages.value[i];
+        if (candidate.role === "assistant" && !candidate.isSystemMessage) {
+            return candidate.id === message.id;
+        }
+    }
+    return false;
 }
 
 
@@ -1213,7 +1226,7 @@ function formatTime(timestamp: string) {
         v-for="(step, idx) in message.analysisSteps"
         :key="idx"
         class="analysis-step"
-        :class="[step.type, step.status ?? '']">
+        :class="[step.type, step.status && step.status !== 'pending' ? step.status : '']">
         <div class="analysis-step-header">
             <span class="step-label">
                 {{ step.type === 'thought'
@@ -1225,7 +1238,7 @@ function formatTime(timestamp: string) {
                             : 'Conclusion' }}
             </span>
             <span
-                v-if="step.type === 'action' && step.status"
+                v-if="step.type === 'action' && step.status && step.status !== 'pending'"
                 class="step-status"
                 :class="step.status">
                 {{ step.status }}
@@ -1281,11 +1294,22 @@ function formatTime(timestamp: string) {
         <div v-if="pyodideStateForMessage(message)?.artifacts.length" class="mt-2">
             <h6 class="mb-1">Artifacts</h6>
             <ul class="list-unstyled mb-0">
-                <li v-for="artifact in pyodideStateForMessage(message)?.artifacts" :key="artifact.dataset_id || artifact.name">
+                <li
+                    v-for="artifact in pyodideStateForMessage(message)?.artifacts"
+                    :key="artifact.dataset_id || artifact.name"
+                    class="mb-2"
+                >
                     <button class="btn btn-link btn-sm" type="button" @click="downloadArtifact(artifact)">
                         {{ artifact.name || artifact.dataset_id }}
                     </button>
                     <span v-if="artifact.size" class="text-muted ml-1">({{ formatSize(artifact.size) }})</span>
+                    <div v-if="artifact.mime_type && artifact.mime_type.startsWith('image/')" class="mt-2">
+                        <img
+                            :src="artifact.download_url"
+                            :alt="artifact.name || 'plot preview'"
+                            class="plot-preview img-thumbnail"
+                        />
+                    </div>
                 </li>
             </ul>
         </div>
@@ -1294,7 +1318,7 @@ function formatTime(timestamp: string) {
 
 <!-- Action suggestions for assistant messages -->
 <ActionCard
-                        v-if="message.role === 'assistant' && message.suggestions?.length"
+                        v-if="isLatestAssistantMessage(message) && message.suggestions?.length"
                         :suggestions="message.suggestions"
                         :processing-action="processingAction"
                         @handle-action="(action) => handleAction(action, message.agentResponse || {})" />
@@ -1485,6 +1509,13 @@ function formatTime(timestamp: string) {
 
 .pyodide-status .pyodide-stream.text-danger {
     color: #f8d7da;
+}
+
+.plot-preview {
+    max-width: 320px;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    background: #fff;
 }
 
 .step-requirements {

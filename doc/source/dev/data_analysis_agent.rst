@@ -9,9 +9,8 @@ Pyodide execution loop.
 
 Current Capabilities
 --------------------
-- Backend provides a ``data_analysis_dspy`` agent that plans with DSPy, emits
-  browser-ready execution payloads, and incorporates the resulting stdout, stderr,
-  and artifact summaries into subsequent planning turns.
+- Backend previously exposed a ``data_analysis_dspy`` agent that planned with DSPy and emitted
+  browser-ready execution payloads, but this variant is temporarily disabled while we stabilize it.
 - Chat UI surfaces a dataset multi-select control; selected dataset IDs are
   forwarded with every message, stored in chat history, and translated into
   downloadable dataset URLs for the Pyodide worker.

@@ -71,8 +71,7 @@ class WorkflowOrchestratorAgent(BaseGalaxyAgent):
         - tool_recommendation: Find appropriate tools for tasks
         - gtn_training: Provide tutorials and learning materials
         - custom_tool: Create new Galaxy tools
-        - data_analysis_dspy: Perform exploratory data analysis with DSPy-planned code executed client-side
-        - data_analysis: Legacy exploratory data analysis agent (use only if DSPy agent unavailable)
+        - data_analysis: Exploratory data analysis agent (DSPy variant temporarily unavailable)
 
         EXAMPLES:
         Query: "My RNA-seq tool failed, help me fix it and find alternatives"
