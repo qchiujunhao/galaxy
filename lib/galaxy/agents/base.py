@@ -127,6 +127,41 @@ class BaseGalaxyAgent(ABC):
         """Return the system prompt for this agent."""
         pass
 
+    def _validate_query(self, query: str) -> Optional[str]:
+        """
+        Validate query input for security and safety.
+
+        Returns:
+            None if valid, error message if invalid
+        """
+        if not query or not isinstance(query, str):
+            return "Query must be a non-empty string"
+
+        # Get max query length from config (default 10000 chars)
+        max_length = self._get_agent_config("max_query_length", 10000)
+
+        if len(query) > max_length:
+            return f"Query too long ({len(query)} chars). Maximum is {max_length} characters."
+
+        # Check for obvious prompt injection patterns
+        suspicious_patterns = [
+            "ignore previous instructions",
+            "ignore all previous",
+            "disregard all previous",
+            "forget all previous",
+            "new instructions:",
+            "system:",
+            "assistant:",
+        ]
+
+        query_lower = query.lower()
+        for pattern in suspicious_patterns:
+            if pattern in query_lower:
+                log.warning(f"Potential prompt injection detected in {self.agent_type} query: {pattern}")
+                # Don't reject, just log - could be legitimate
+
+        return None
+
     async def process(self, query: str, context: Dict[str, Any] = None) -> AgentResponse:
         """
         Process a query and return structured response.
@@ -138,6 +173,17 @@ class BaseGalaxyAgent(ABC):
         Returns:
             AgentResponse with structured output
         """
+        # Validate input
+        validation_error = self._validate_query(query)
+        if validation_error:
+            return AgentResponse(
+                content=validation_error,
+                confidence="low",
+                agent_type=self.agent_type,
+                suggestions=[],
+                metadata={"validation_error": True},
+            )
+
         try:
             # Prepare the full prompt with context
             full_prompt = self._prepare_prompt(query, context or {})
@@ -155,6 +201,30 @@ class BaseGalaxyAgent(ABC):
         except Exception as e:
             log.error(f"Error in {self.agent_type} agent: {e}")
             return self._get_fallback_response(query, str(e))
+
+    def _sanitize_for_logging(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Sanitize dictionary for safe logging by masking sensitive values.
+
+        Args:
+            data: Dictionary potentially containing sensitive information
+
+        Returns:
+            Sanitized copy safe for logging
+        """
+        sensitive_keys = {"api_key", "apikey", "key", "token", "secret", "password", "credential"}
+        sanitized = {}
+
+        for key, value in data.items():
+            key_lower = key.lower()
+            if any(sensitive in key_lower for sensitive in sensitive_keys):
+                sanitized[key] = "***REDACTED***"
+            elif isinstance(value, dict):
+                sanitized[key] = self._sanitize_for_logging(value)
+            else:
+                sanitized[key] = value
+
+        return sanitized
 
     async def _run_with_retry(self, prompt: str, max_retries: int = 3, base_delay: float = 1.0):
         """Run the agent, with exponential backoff for retries."""
