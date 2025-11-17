@@ -491,6 +491,9 @@ function handleStreamMessage(event: MessageEvent) {
     try {
         const payload = JSON.parse(event.data);
         if (payload?.type === "exec_followup" && payload.payload) {
+            if (payload.exchange_id && payload.exchange_id !== currentChatId.value) {
+                return;
+            }
             const taskId = payload.task_id as string | undefined;
             if (taskId && deliveredTaskIds.has(taskId)) {
                 return;
@@ -504,6 +507,7 @@ function handleStreamMessage(event: MessageEvent) {
                 }
             }
             appendAssistantMessage(payload.payload, selectedAgentType.value);
+            loadDatasetOptions();
         }
     } catch (error) {
         console.error("Failed to process chat stream message", error);
@@ -630,6 +634,7 @@ async function submitPyodideExecutionResult(
             deliveredTaskIds.add(payload.task_id);
         }
         appendAssistantMessage(data, message.agentType || selectedAgentType.value);
+        await loadDatasetOptions();
     }
 }
 
@@ -909,7 +914,12 @@ async function loadDatasetOptions() {
                     const extension = item.extension || item.ext || item.file_ext || undefined;
                     const sizeValue = item.file_size_bytes ?? item.file_size ?? item.size ?? undefined;
                     const size = typeof sizeValue === "number" ? sizeValue : Number(sizeValue ?? 0);
-                    return id ? { id, name, extension, size: Number.isFinite(size) ? size : undefined } : null;
+                    const hidden = Boolean(item.hidden);
+                    const generated = typeof name === "string" && name.trim().toLowerCase().startsWith("generated_file");
+                    if (!id || hidden || generated) {
+                        return null;
+                    }
+                    return { id, name, extension, size: Number.isFinite(size) ? size : undefined };
                 })
                 .filter((entry): entry is DatasetOption => Boolean(entry));
         }
