@@ -802,6 +802,43 @@ function updateMessageOutputsFromArtifacts(message: Message, artifacts: Uploaded
     message.generatedFiles = fileNames.length ? fileNames : message.generatedFiles;
 }
 
+function applyExecutionResultMetadata(message: Message, execResult: any) {
+    if (!execResult) {
+        return;
+    }
+    if (!message.agentResponse) {
+        message.agentResponse = {
+            metadata: {},
+            suggestions: [],
+            agent_type: message.agentType,
+            confidence: message.confidence,
+            content: message.content,
+        } as unknown as AgentResponse;
+    }
+    const metadata = ((message.agentResponse as any).metadata ||= {});
+    metadata.pyodide_status = execResult.success ? "completed" : "error";
+    metadata.stdout = execResult.stdout || "";
+    metadata.stderr = execResult.stderr || "";
+    metadata.execution = {
+        success: execResult.success,
+        stdout: execResult.stdout || "",
+        stderr: execResult.stderr || "",
+        artifacts: execResult.artifacts || [],
+        task_id: execResult.task_id,
+    };
+    if (metadata.pyodide_task && execResult.task_id) {
+        metadata.executed_task = metadata.executed_task || { task_id: execResult.task_id };
+        metadata.executed_task.task_id = execResult.task_id;
+        pyodideTaskToMessage.set(String(execResult.task_id), message);
+        deliveredTaskIds.add(String(execResult.task_id));
+    }
+    if (metadata.pyodide_task && execResult.success) {
+        delete metadata.pyodide_task;
+    }
+    const artifacts = normaliseArtifactList(execResult.artifacts);
+    updateMessageOutputsFromArtifacts(message, artifacts);
+}
+
 
 function normaliseAnalysisSteps(raw: unknown): AnalysisStep[] {
     if (!Array.isArray(raw)) {
@@ -1108,11 +1145,19 @@ async function loadPreviousChat(item: ChatHistoryItem) {
             messages.value = [];
             deliveredTaskIds.clear();
             pyodideTaskToMessage.clear();
+            const taskIdToMessage: Record<string, Message> = {};
+            const pendingExecResults: Record<string, any> = {};
 
             fullConversation.forEach((msg: any, index: number) => {
                 if (msg.role === "execution_result") {
                     if (msg.task_id) {
                         deliveredTaskIds.add(String(msg.task_id));
+                        const target = taskIdToMessage[String(msg.task_id)];
+                        if (target) {
+                            applyExecutionResultMetadata(target, msg);
+                        } else {
+                            pendingExecResults[String(msg.task_id)] = msg;
+                        }
                     }
                     return;
                 }
@@ -1156,11 +1201,24 @@ async function loadPreviousChat(item: ChatHistoryItem) {
                             if (executedTask?.task_id) {
                                 deliveredTaskIds.add(String(executedTask.task_id));
                                 pyodideTaskToMessage.set(String(executedTask.task_id), message);
+                                taskIdToMessage[String(executedTask.task_id)] = message;
                             }
                             const pendingTask = (metadata as any)?.pyodide_task;
                             if (pendingTask?.task_id) {
                                 pyodideTaskToMessage.set(String(pendingTask.task_id), message);
+                                taskIdToMessage[String(pendingTask.task_id)] = message;
                             }
+                            const taskIdsToCheck = [
+                                executedTask?.task_id,
+                                pendingTask?.task_id,
+                                metadata?.pyodide_task?.task_id,
+                            ].filter(Boolean) as string[];
+                            taskIdsToCheck.forEach((taskId) => {
+                                if (pendingExecResults[taskId]) {
+                                    applyExecutionResultMetadata(message, pendingExecResults[taskId]);
+                                    delete pendingExecResults[taskId];
+                                }
+                            });
                         }
                     }
                 }
@@ -1465,7 +1523,10 @@ function formatTime(timestamp: string) {
     <template v-if="message.role === 'assistant'">
         <!-- eslint-disable-next-line vue/no-v-html -->
         <div v-html="renderMarkdown(message.content)" />
-        <div v-if="message.generatedPlots?.length || message.generatedFiles?.length" class="generated-output mt-2">
+        <div
+            v-if="(message.generatedPlots?.length || message.generatedFiles?.length) && !message.artifacts?.length"
+            class="generated-output mt-2"
+        >
             <div v-if="message.generatedPlots?.length" class="mb-2">
                 <h6 class="mb-1">Generated Plots</h6>
                 <ul class="list-unstyled mb-0 small">
