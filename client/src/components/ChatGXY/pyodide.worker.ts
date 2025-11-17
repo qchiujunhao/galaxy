@@ -296,7 +296,7 @@ async function seedPythonEnvironment(py: any, datasets: Array<{ id: string; name
     py.globals.set("_GXY_DATASETS_JSON", datasetJson);
     py.globals.set("_GXY_ALIAS_JSON", aliasJson);
     await py.runPythonAsync(
-        `import json\nfrom pathlib import Path\nimport builtins as _gxy_builtins\n\ntry:\n    _DATASET_ENTRIES = json.loads(globals().pop("_GXY_DATASETS_JSON"))\nexcept KeyError:\n    _DATASET_ENTRIES = []\n\ntry:\n    globals().pop("_GXY_ALIAS_JSON")\nexcept KeyError:\n    pass\n\n_DATASET_INDEX = {}\nfor entry in _DATASET_ENTRIES:\n    aliases = entry.get("aliases") or []\n    for alias in aliases:\n        if alias:\n            _DATASET_INDEX[alias] = entry\n    dataset_id = entry.get("id")\n    if dataset_id:\n        _DATASET_INDEX.setdefault(dataset_id, entry)\n\noutputs_root = Path("/tmp/galaxy")\noutputs_dir = outputs_root / "outputs_dir"\noutputs_dir.mkdir(parents=True, exist_ok=True)\ngenerated_dir = outputs_dir / "generated_file"\ngenerated_dir.mkdir(parents=True, exist_ok=True)\n\nalias_dir = Path("generated_file")\nif not alias_dir.exists():\n    try:\n        alias_dir.symlink_to(generated_dir)\n    except Exception:\n        if not alias_dir.exists():\n            alias_dir.mkdir(parents=True, exist_ok=True)\n\n_original_open = globals().get("_GXY_ORIGINAL_OPEN")\nif _original_open is None:\n    _original_open = _gxy_builtins.open\n    globals()[\"_GXY_ORIGINAL_OPEN\"] = _original_open\n\n\ndef _resolve_dataset(alias: str):\n    key = alias or \"\"\n    entry = _DATASET_INDEX.get(key)\n    if entry is None:\n        raise KeyError(f\"Unknown dataset alias: {alias}\")\n    return entry\n\ndef get_dataset_path(alias: str) -> str:\n    return _resolve_dataset(alias)[\"path\"]\n\ndef load_dataset(alias: str, **read_kwargs):\n    entry = _resolve_dataset(alias)\n    path = entry[\"path\"]\n    import pandas as pd\n    name = entry.get(\"name\") or \"\"\n    if not read_kwargs and (name.lower().endswith(\".tsv\") or path.lower().endswith(\".tsv\")):\n        read_kwargs.setdefault(\"sep\", \"\\t\")\n    return pd.read_csv(path, **read_kwargs)\n\ndef _open_with_alias(path, *args, **kwargs):\n    if isinstance(path, str) and path in _DATASET_INDEX:\n        return _original_open(_DATASET_INDEX[path][\"path\"], *args, **kwargs)\n    return _original_open(path, *args, **kwargs)\n\n_gxy_builtins.open = _open_with_alias\n\nglobals()[\"_GXY_ORIGINAL_LOAD_DATASET\"] = load_dataset\nglobals()[\"_GXY_ORIGINAL_GET_DATASET_PATH\"] = get_dataset_path\n`
+        `import json\nfrom pathlib import Path\nimport builtins as _gxy_builtins\nimport warnings as _gxy_warnings\n\ntry:\n    _gxy_warnings.filterwarnings(\n        "ignore",\n        message="Pyarrow will become a required dependency of pandas.*",\n        category=DeprecationWarning,\n    )\nexcept Exception:\n    pass\n\ntry:\n    _DATASET_ENTRIES = json.loads(globals().pop("_GXY_DATASETS_JSON"))\nexcept KeyError:\n    _DATASET_ENTRIES = []\n\ntry:\n    globals().pop("_GXY_ALIAS_JSON")\nexcept KeyError:\n    pass\n\n_DATASET_INDEX = {}\nfor entry in _DATASET_ENTRIES:\n    aliases = entry.get("aliases") or []\n    for alias in aliases:\n        if alias:\n            _DATASET_INDEX[alias] = entry\n    dataset_id = entry.get("id")\n    if dataset_id:\n        _DATASET_INDEX.setdefault(dataset_id, entry)\n\noutputs_root = Path("/tmp/galaxy")\noutputs_dir = outputs_root / "outputs_dir"\noutputs_dir.mkdir(parents=True, exist_ok=True)\ngenerated_dir = outputs_dir / "generated_file"\ngenerated_dir.mkdir(parents=True, exist_ok=True)\n\nalias_dir = Path("generated_file")\nif not alias_dir.exists():\n    try:\n        alias_dir.symlink_to(generated_dir)\n    except Exception:\n        if not alias_dir.exists():\n            alias_dir.mkdir(parents=True, exist_ok=True)\n\n_original_open = globals().get("_GXY_ORIGINAL_OPEN")\nif _original_open is None:\n    _original_open = _gxy_builtins.open\n    globals()[\"_GXY_ORIGINAL_OPEN\"] = _original_open\n\n\ndef _resolve_dataset(alias: str):\n    key = alias or \"\"\n    entry = _DATASET_INDEX.get(key)\n    if entry is None:\n        raise KeyError(f\"Unknown dataset alias: {alias}\")\n    return entry\n\ndef get_dataset_path(alias: str) -> str:\n    return _resolve_dataset(alias)[\"path\"]\n\ndef load_dataset(alias: str, **read_kwargs):\n    entry = _resolve_dataset(alias)\n    path = entry[\"path\"]\n    import pandas as pd\n    name = entry.get(\"name\") or \"\"\n    if not read_kwargs and (name.lower().endswith(\".tsv\") or path.lower().endswith(\".tsv\")):\n        read_kwargs.setdefault(\"sep\", \"\\t\")\n    return pd.read_csv(path, **read_kwargs)\n\ndef _open_with_alias(path, *args, **kwargs):\n    if isinstance(path, str) and path in _DATASET_INDEX:\n        return _original_open(_DATASET_INDEX[path][\"path\"], *args, **kwargs)\n    return _original_open(path, *args, **kwargs)\n\n_gxy_builtins.open = _open_with_alias\n\nglobals()[\"_GXY_ORIGINAL_LOAD_DATASET\"] = load_dataset\nglobals()[\"_GXY_ORIGINAL_GET_DATASET_PATH\"] = get_dataset_path\nimport os as _gxy_os\n_gxy_os.environ.setdefault("MPLBACKEND", "agg")\ntry:\n    import matplotlib\n    matplotlib.use(\"agg\")\nexcept Exception:\n    pass\n`
     );
 }
 
@@ -306,16 +306,96 @@ async function runUserCode(py: any, code: string): Promise<{ success: boolean; e
     }
     await py.runPythonAsync("_GXY_PRE_KEYS = set(globals().keys())");
     try {
-        await py.runPythonAsync(code);
-        const scalarSummary: string = await py.runPythonAsync(
-            `summary_lines = []\npre_keys = globals().get('_GXY_PRE_KEYS', set())\nfor key, value in list(globals().items()):\n    if key in pre_keys or key.startswith('_'):\n        continue\n    if callable(value):\n        continue\n    if isinstance(value, (int, float, str, bool)):\n        summary_lines.append(f\"{key} = {value!r}\")\n    elif isinstance(value, (list, tuple)) and len(value) <= 10:\n        summary_lines.append(f\"{key} = {value!r}\")\n    elif isinstance(value, dict) and len(value) <= 10:\n        try:\n            preview = {k: value[k] for k in list(value)[:5]}\n            summary_lines.append(f\"{key} = {preview!r}\")\n        except Exception:\n            pass\ntry:\n    del globals()['_GXY_PRE_KEYS']\nexcept KeyError:\n    pass\n\"\\n\".join(summary_lines)\n`
+        try {
+            await py.runPythonAsync("import matplotlib\nmatplotlib.use('agg')");
+        } catch (error) {
+            // Ignore backend configuration errors
+        }
+
+        py.globals.set("_GXY_USER_CODE", code);
+        try {
+            await py.runPythonAsync(
+                [
+                    "import ast",
+                    "try:",
+                    "    ast.parse(_GXY_USER_CODE)",
+                    "except SyntaxError as exc:",
+                    "    raise SyntaxError(f'Syntax error in generated code: {exc}')",
+                ].join("\n")
+            );
+        } finally {
+            await py.runPythonAsync("globals().pop('_GXY_USER_CODE', None)");
+        }
+
+        const preArtifactsJson = await py.runPythonAsync(
+            "import json, os\n" +
+                "try:\n" +
+                "    files = os.listdir('generated_file')\n" +
+                "except Exception:\n" +
+                "    files = []\n" +
+                "json.dumps(sorted(files))\n"
         );
+        const preArtifacts = new Set<string>(JSON.parse(preArtifactsJson));
+
+        await py.runPythonAsync(code);
+
+        const scalarSummary: string = await py.runPythonAsync(
+            [
+                "summary_lines = []",
+                "pre_keys = globals().get('_GXY_PRE_KEYS', set())",
+                "for key, value in list(globals().items()):",
+                "    if key in pre_keys or key.startswith('_'):",
+                "        continue",
+                "    if callable(value):",
+                "        continue",
+                "    if isinstance(value, (int, float, str, bool)):",
+                "        summary_lines.append(f\"{key} = {value!r}\")",
+                "    elif isinstance(value, (list, tuple)) and len(value) <= 10:",
+                "        summary_lines.append(f\"{key} = {value!r}\")",
+                "    elif isinstance(value, dict) and len(value) <= 10:",
+                "        try:",
+                "            preview = {k: value[k] for k in list(value)[:5]}",
+                "            summary_lines.append(f\"{key} = {preview!r}\")",
+                "        except Exception:",
+                "            pass",
+                "try:",
+                "    del globals()['_GXY_PRE_KEYS']",
+                "except KeyError:",
+                "    pass",
+                "result = '\\n'.join(summary_lines)",
+                "result",
+            ].join("\n")
+        );
+
+        const postArtifactsJson = await py.runPythonAsync(
+            "import json, os\n" +
+                "try:\n" +
+                "    files = os.listdir('generated_file')\n" +
+                "except Exception:\n" +
+                "    files = []\n" +
+                "json.dumps(sorted(files))\n"
+        );
+        const postArtifacts: string[] = JSON.parse(postArtifactsJson);
+        const newArtifacts = postArtifacts.filter((name) => !preArtifacts.has(name));
+
+        const summaryParts: string[] = [];
         if (scalarSummary && scalarSummary.trim()) {
+            summaryParts.push(scalarSummary.trim());
+        }
+        if (newArtifacts.length) {
+            summaryParts.push(`generated_files = ${JSON.stringify(newArtifacts)}`);
+        }
+        if (summaryParts.length === 0) {
+            summaryParts.push("execution_succeeded");
+        }
+        if (summaryParts.length) {
+            const summaryText = summaryParts.join("\n");
             if (stdoutBuffer && !stdoutBuffer.endsWith("\n")) {
                 stdoutBuffer += "\n";
             }
-            stdoutBuffer += scalarSummary.trim();
+            stdoutBuffer += summaryText;
         }
+
         return { success: true };
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
@@ -340,45 +420,52 @@ async function runUserCode(py: any, code: string): Promise<{ success: boolean; e
         }
     }
 }
-
 async function collectArtifacts(py: any): Promise<{ artifacts: PyodideArtifact[]; transferables: ArrayBuffer[] }> {
     const artifacts: PyodideArtifact[] = [];
     const transferables: ArrayBuffer[] = [];
-    let entries: string[] = [];
-    try {
-        entries = py.FS.readdir(OUTPUT_ROOT);
-    } catch (err) {
-        return { artifacts, transferables };
-    }
-    for (const entry of entries) {
-        if (entry === "." || entry === "..") {
-            continue;
-        }
-        const filePath = `${OUTPUT_ROOT}/${entry}`;
-        let stats: any;
+
+    const visitDirectory = (directory: string, relativePrefix = "") => {
+        let entries: string[] = [];
         try {
-            stats = py.FS.stat(filePath);
+            entries = py.FS.readdir(directory);
         } catch (err) {
-            continue;
+            return;
         }
-        if (py.FS.isDir(stats.mode)) {
-            continue;
+        for (const entry of entries) {
+            if (entry === "." || entry === "..") {
+                continue;
+            }
+            const filePath = `${directory}/${entry}`;
+            const relativeName = relativePrefix ? `${relativePrefix}/${entry}` : entry;
+            let stats: any;
+            try {
+                stats = py.FS.stat(filePath);
+            } catch (err) {
+                continue;
+            }
+            if (py.FS.isDir(stats.mode)) {
+                visitDirectory(filePath, relativeName);
+                continue;
+            }
+            try {
+                const data = py.FS.readFile(filePath);
+                const buffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+                artifacts.push({
+                    name: relativeName,
+                    path: filePath,
+                    size: stats.size,
+                    mime_type: guessMimeType(relativeName),
+                    binary: buffer,
+                });
+                transferables.push(buffer);
+            } catch (err) {
+                // Skip unreadable artifacts
+            }
         }
-        try {
-            const data = py.FS.readFile(filePath);
-            const buffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-            artifacts.push({
-                name: entry,
-                path: filePath,
-                size: stats.size,
-                mime_type: guessMimeType(entry),
-                binary: buffer,
-            });
-            transferables.push(buffer);
-        } catch (err) {
-            // Skip unreadable artifacts
-        }
-    }
+    };
+
+    visitDirectory(OUTPUT_ROOT);
+
     return { artifacts, transferables };
 }
 

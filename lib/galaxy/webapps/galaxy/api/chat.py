@@ -598,13 +598,21 @@ class ChatAPI:
         trans.app.security_agent.set_all_dataset_permissions(hda.dataset, permissions, new=True, flush=False)
 
         dataset = hda.dataset
+        try:
+            trans.app.object_store.create(dataset)
+        except Exception as exc:  # pragma: no cover - object store allocation failure
+            trans.sa_session.rollback()
+            log.exception("Unable to allocate object store for artifact upload")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
         file_path = dataset.get_file_name()
         try:
             with open(file_path, "wb") as handle:
                 handle.write(raw_bytes)
-        except Exception:
+        except Exception as exc:
             trans.sa_session.rollback()
-            raise
+            log.exception("Failed writing artifact to object store")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
         hda.state = hda.states.OK
         try:
