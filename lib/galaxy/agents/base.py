@@ -366,7 +366,7 @@ class BaseGalaxyAgent(ABC):
         """Get the max tokens setting for this agent."""
         return self._get_agent_config("max_tokens", 2000)
 
-    async def _call_agent_from_tool(self, agent_type: str, query: str, ctx, usage=None) -> str:
+    async def _call_agent_from_tool(self, agent_type: str, query: str, ctx, usage=None, context: Dict[str, Any] = None) -> str:
         """
         Centralized helper method for calling other agents from within tool functions.
 
@@ -378,6 +378,7 @@ class BaseGalaxyAgent(ABC):
             query: Query to send to the target agent
             ctx: RunContext from the calling tool function
             usage: Optional usage tracking object (defaults to ctx.usage)
+            context: Optional context dict with conversation history, metadata, etc.
 
         Returns:
             String response from the target agent
@@ -389,7 +390,8 @@ class BaseGalaxyAgent(ABC):
             response = await self._call_agent_from_tool(
                 "tool_recommendation",
                 f"Find alternatives for: {task}",
-                ctx
+                ctx,
+                context={"conversation_history": history}
             )
         """
         try:
@@ -399,6 +401,19 @@ class BaseGalaxyAgent(ABC):
             # Get the target agent
             target_agent = agent_registry.get_agent(agent_type, ctx.deps)
 
+            # Prepare query with context if available
+            full_query = query
+            if context and "conversation_history" in context:
+                history = context["conversation_history"]
+                if history and len(history) > 0:
+                    # Add conversation history to query for better context
+                    history_text = "Previous conversation:\n"
+                    for msg in history[-4:]:  # Last 4 messages for context
+                        role = msg.get("role", "unknown")
+                        content = msg.get("content", "")[:200]  # Truncate long messages
+                        history_text += f"{role}: {content}\n"
+                    full_query = f"{history_text}\nCurrent request: {query}"
+
             # Get model settings for the target agent
             target_model_settings = {
                 "temperature": target_agent._get_temperature(),
@@ -407,7 +422,7 @@ class BaseGalaxyAgent(ABC):
 
             # Call the agent with proper usage tracking and model settings
             result = await target_agent.agent.run(
-                query,
+                full_query,
                 deps=ctx.deps,
                 usage=usage or ctx.usage,  # Use provided usage or fall back to ctx.usage
                 model_settings=target_model_settings,
