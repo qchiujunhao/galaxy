@@ -450,7 +450,8 @@ function openChatStream(exchangeId: number) {
     }
 
     try {
-        const appRoot = getAppRoot(undefined, true) || "/";
+        const rawRoot = getAppRoot(undefined, true) || "/";
+        const appRoot = rawRoot.replace(/\/+$/, "") || "/";
         const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
         const wsUrl = `${protocol}//${window.location.host}${appRoot}/api/chat/exchange/${exchangeId}/stream`;
         const socket = new WebSocket(wsUrl);
@@ -1523,76 +1524,66 @@ function formatTime(timestamp: string) {
     <template v-if="message.role === 'assistant'">
         <!-- eslint-disable-next-line vue/no-v-html -->
         <div v-html="renderMarkdown(message.content)" />
-        <div
+        <details
             v-if="(message.generatedPlots?.length || message.generatedFiles?.length) && !message.artifacts?.length"
-            class="generated-output mt-2"
+            class="generated-panel mt-2"
+            open
         >
-            <div v-if="message.generatedPlots?.length" class="mb-2">
-                <h6 class="mb-1">Generated Plots</h6>
-                <ul class="list-unstyled mb-0 small">
-                    <li v-for="plot in message.generatedPlots" :key="`${message.id}-plot-${plot}`" class="mb-2">
+            <summary class="text-muted">Generated Outputs</summary>
+            <div v-if="message.generatedPlots?.length" class="generated-section">
+                <h6 class="mb-1">Plots</h6>
+                <div class="generated-grid">
+                    <span v-for="plot in message.generatedPlots" :key="`${message.id}-plot-${plot}`" class="generated-chip">
                         <code>{{ formatGeneratedEntry(plot) }}</code>
-                        <div v-if="artifactPreviewUrl(plot, message.artifacts)" class="mt-1">
-                            <img
-                                :src="artifactPreviewUrl(plot, message.artifacts)"
-                                :alt="formatGeneratedEntry(plot)"
-                                class="plot-preview img-thumbnail"
-                            />
-                        </div>
-                        <button
-                            v-if="artifactIsDownloadable(plot, message.artifacts)"
-                            class="btn btn-link btn-sm p-0 mt-1"
-                            type="button"
-                            @click="artifactDownloadHandler(plot, message.artifacts)"
-                        >
-                            Download
-                        </button>
-                    </li>
-                </ul>
+                    </span>
+                </div>
             </div>
-            <div v-if="message.generatedFiles?.length">
-                <h6 class="mb-1">Generated Files</h6>
-                <ul class="list-unstyled mb-0 small">
-                    <li v-for="file in message.generatedFiles" :key="`${message.id}-file-${file}`">
+            <div v-if="message.generatedFiles?.length" class="generated-section">
+                <h6 class="mb-1">Files</h6>
+                <div class="generated-grid">
+                    <span v-for="file in message.generatedFiles" :key="`${message.id}-file-${file}`" class="generated-chip">
                         <code>{{ formatGeneratedEntry(file) }}</code>
-                        <button
-                            v-if="artifactIsDownloadable(file, message.artifacts)"
-                            class="btn btn-link btn-sm p-0 ml-2"
-                            type="button"
-                            @click="artifactDownloadHandler(file, message.artifacts)"
-                        >
-                            Download
-                        </button>
-                    </li>
-                </ul>
+                    </span>
+                </div>
             </div>
-        </div>
+        </details>
     <div
         v-if="message.artifacts?.length"
         class="mt-2"
     >
-        <h6 class="mb-1">Saved Artifacts</h6>
-        <ul class="list-unstyled mb-0">
-            <li v-for="artifact in message.artifacts" :key="artifact.dataset_id || artifact.name" class="mb-2">
-                <button
-                    v-if="artifact.download_url"
-                    class="btn btn-link btn-sm"
-                    type="button"
-                    @click="downloadArtifact(artifact)"
+        <details open class="artifacts-panel">
+            <summary class="text-muted">Saved Artifacts ({{ message.artifacts.length }})</summary>
+            <div class="artifact-grid">
+                <div
+                    v-for="artifact in message.artifacts"
+                    :key="artifact.dataset_id || artifact.name"
+                    class="artifact-grid-item"
                 >
-                    {{ artifact.name || artifact.dataset_id }}
-                </button>
-                <span v-else>{{ artifact.name || artifact.dataset_id }}</span>
-                <span v-if="artifact.size" class="text-muted ml-1">({{ formatSize(artifact.size) }})</span>
-                <div v-if="artifact.mime_type && artifact.mime_type.startsWith('image/') && artifact.download_url" class="mt-2">
-                    <img
-                        :src="artifact.download_url"
-                        :alt="artifact.name || 'plot preview'"
-                        class="plot-preview img-thumbnail"
-                    />
+                    <div class="artifact-name">
+                        <button
+                            v-if="artifact.download_url"
+                            class="btn btn-link btn-sm p-0"
+                            type="button"
+                            @click="downloadArtifact(artifact)"
+                        >
+                            {{ artifact.name || artifact.dataset_id }}
+                        </button>
+                        <span v-else>{{ artifact.name || artifact.dataset_id }}</span>
+                        <span v-if="artifact.size" class="text-muted ml-1">({{ formatSize(artifact.size) }})</span>
+                    </div>
+                    <div
+                        v-if="artifact.mime_type && artifact.mime_type.startsWith('image/') && artifact.download_url"
+                        class="artifact-preview mt-2"
+                    >
+                        <img
+                            :src="artifact.download_url"
+                            :alt="artifact.name || 'plot preview'"
+                            class="plot-preview img-thumbnail"
+                        />
+                    </div>
                 </div>
-            </li>
-        </ul>
+            </div>
+        </details>
     </div>
     <div v-if="message.agentResponse?.metadata?.executed_task?.code" class="mt-2 executed-code">
         <details open>
@@ -1911,6 +1902,46 @@ function formatTime(timestamp: string) {
     border: 1px solid #dee2e6;
     border-radius: 4px;
     background: #fff;
+    width: 100%;
+}
+
+.generated-panel summary,
+.artifacts-panel summary {
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.generated-grid,
+.artifact-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.5rem;
+}
+
+.generated-chip {
+    background: #eef2ff;
+    border-radius: 999px;
+    padding: 0.25rem 0.6rem;
+    font-size: 0.8rem;
+    display: inline-block;
+}
+
+.artifact-grid-item {
+    border: 1px solid #edf0f3;
+    border-radius: 6px;
+    padding: 0.5rem;
+    background: #fbfbfd;
+    min-height: 120px;
+}
+
+.artifact-grid-item .artifact-name {
+    font-size: 0.9rem;
+    margin-bottom: 0.25rem;
+}
+
+.artifact-preview img {
+    max-height: 180px;
+    object-fit: contain;
 }
 
 .step-requirements {
