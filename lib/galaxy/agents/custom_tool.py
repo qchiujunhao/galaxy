@@ -95,8 +95,8 @@ class CustomToolAgent(BaseGalaxyAgent):
     async def process(self, query: str, context: Dict[str, Any] = None) -> AgentResponse:
         """Process tool creation request with fallback."""
 
-        # Check if model supports structured output
-        model_name = self.deps.config.ai_model.lower()
+        # Check if model supports structured output (use agent config, not global config)
+        model_name = self._get_agent_config("model", "").lower()
         use_structured = "scout" in model_name or "gpt" in model_name or "claude" in model_name
 
         try:

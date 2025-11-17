@@ -47,7 +47,7 @@ class QueryRouterAgent(BaseGalaxyAgent):
 
     def _create_agent(self) -> Agent:
         """Create the router agent with structured output."""
-        model_name = self.deps.config.ai_model or ""
+        model_name = self._get_agent_config("model", "")
 
         # DeepSeek models don't support structured output, use fallback
         if "deepseek" in model_name.lower():
@@ -98,7 +98,7 @@ class QueryRouterAgent(BaseGalaxyAgent):
             # Use pydantic-ai for all endpoints with retry logic
             result = await self._run_with_retry(full_query)
 
-            model_name = self.deps.config.ai_model or ""
+            model_name = self._get_agent_config("model", "")
 
             # Handle DeepSeek simple text response
             if "deepseek" in model_name.lower():

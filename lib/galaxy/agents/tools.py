@@ -537,13 +537,3 @@ class ToolRecommendationAgent(BaseGalaxyAgent):
             "suggestions": suggestions,
         }
 
-    def _get_model_name(self) -> str:
-        """Get the model name for tool recommendation."""
-        # Check for global AI model configuration first
-        if hasattr(self.deps.config, "ai_model") and self.deps.config.ai_model:
-            # Use the global AI model configuration
-            return f"openai:{self.deps.config.ai_model}"
-
-        # Fall back to agent-specific configuration
-        agent_config = getattr(self.deps.config, "agents", {}).get("tool_recommendation", {})
-        return agent_config.get("model", "openai:gpt-3.5-turbo")
