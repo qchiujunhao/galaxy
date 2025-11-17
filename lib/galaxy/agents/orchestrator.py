@@ -4,6 +4,7 @@ Workflow orchestration agent for coordinating multiple agents on complex tasks.
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import (
     Any,
     Dict,
@@ -63,28 +64,8 @@ class WorkflowOrchestratorAgent(BaseGalaxyAgent):
 
     def get_system_prompt(self) -> str:
         """Get the system prompt for agent selection."""
-        return """
-        You coordinate multiple Galaxy agents for complex queries. Determine which agents to call and in what order.
-
-        AVAILABLE AGENTS:
-        - error_analysis: Debug job failures and errors
-        - tool_recommendation: Find appropriate tools for tasks
-        - gtn_training: Provide tutorials and learning materials
-        - custom_tool: Create new Galaxy tools
-
-        EXAMPLES:
-        Query: "My RNA-seq tool failed, help me fix it and find alternatives"
-        Response: agents=["error_analysis", "tool_recommendation"], sequential=true, reasoning="Fix error first, then recommend alternatives"
-
-        Query: "I need help with variant calling and also want tutorials"
-        Response: agents=["tool_recommendation", "gtn_training"], sequential=false, reasoning="Both can run in parallel"
-
-        RULES:
-        - Most queries only need 1-2 agents
-        - Use sequential=true when one agent's output helps another
-        - Use sequential=false when agents can work independently
-        - Be conservative - don't over-complicate simple requests
-        """
+        prompt_path = Path(__file__).parent / "prompts" / "orchestrator.md"
+        return prompt_path.read_text()
 
     async def process(self, query: str, context: Dict[str, Any] = None) -> AgentResponse:
         """

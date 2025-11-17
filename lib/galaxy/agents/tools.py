@@ -4,6 +4,7 @@ Tool recommendation agent for suggesting appropriate Galaxy tools.
 
 import logging
 import re
+from pathlib import Path
 from typing import (
     Any,
     Dict,
@@ -85,14 +86,8 @@ class ToolRecommendationAgent(BaseGalaxyAgent):
 
     def get_system_prompt(self) -> str:
         """Get the system prompt for tool recommendation."""
-        return """
-        You are a Galaxy Project expert specializing in tool discovery and recommendation.
-        Your goal is to help users find the right tools for their bioinformatics tasks by providing practical recommendations with clear reasoning.
-
-        - Understand the user's task and data types.
-        - Recommend specific, relevant Galaxy tools.
-        - If the user shows learning intent (e.g., asks for tutorials, guides, or examples), use the `get_training_materials` tool to find relevant training resources for the recommended tools.
-        """
+        prompt_path = Path(__file__).parent / "prompts" / "tool_recommendation.md"
+        return prompt_path.read_text()
 
     async def search_tools(self, query: str, category: Optional[str] = None) -> List[Dict[str, Any]]:
         """Search for tools in the Galaxy toolbox."""

@@ -4,6 +4,7 @@ Custom tool creation agent for Galaxy - simplified version using UserToolSource.
 
 import logging
 import re
+from pathlib import Path
 from typing import (
     Any,
     Dict,
@@ -66,44 +67,13 @@ class CustomToolAgent(BaseGalaxyAgent):
 
     def get_system_prompt(self) -> str:
         """System prompt for structured output."""
-        return """You are a Galaxy tool creation expert. Create Galaxy tools based on user requirements.
-
-        Generate a SimpleTool with:
-        - id: lowercase with underscores (e.g., "bwa_mem_paired")
-        - name: human-readable name (e.g., "BWA-MEM Paired End")
-        - version: semantic version (e.g., "1.0.0")
-        - description: brief description
-        - command: the actual shell command
-        - container: appropriate bioconda/biocontainers image
-        - inputs_description: describe the input files and parameters
-        - outputs_description: describe the output files"""
+        prompt_path = Path(__file__).parent / "prompts" / "custom_tool_structured.md"
+        return prompt_path.read_text()
 
     def get_text_prompt(self) -> str:
         """System prompt for text-only fallback."""
-        return """You are a Galaxy tool creation expert. Create Galaxy tools based on user requirements.
-
-        Generate a YAML tool definition with EXACTLY this format:
-
-        ```yaml
-        class: GalaxyUserTool
-        id: tool_id_here
-        name: Tool Name Here
-        version: 1.0.0
-        description: Brief description here
-        container: container/image:tag
-        shell_command: command here
-        inputs:
-          - First input description
-          - Second input description
-        outputs:
-          - Output description
-        ```
-
-        IMPORTANT: 
-        - Use EXACTLY this YAML structure
-        - Keep the ```yaml and ``` markers
-        - Use proper container images from biocontainers
-        - Make the command realistic and complete"""
+        prompt_path = Path(__file__).parent / "prompts" / "custom_tool_text.md"
+        return prompt_path.read_text()
 
     def _parse_yaml_from_text(self, text: str) -> Optional[Dict[str, Any]]:
         """Extract and parse YAML from text response."""

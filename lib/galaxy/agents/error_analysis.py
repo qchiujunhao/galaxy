@@ -3,6 +3,7 @@ Error analysis agent for enhanced tool error diagnosis.
 """
 
 import logging
+from pathlib import Path
 from typing import (
     Any,
     Dict,
@@ -77,15 +78,8 @@ class ErrorAnalysisAgent(BaseGalaxyAgent):
 
     def get_system_prompt(self) -> str:
         """Get the system prompt for error analysis."""
-        return """
-        You are a Galaxy Project expert specializing in diagnosing tool errors and job failures.
-        Your goal is to help users understand why their job failed and provide a clear, actionable solution.
-
-        - Based on the error messages and job context, determine the likely cause.
-        - Provide a step-by-step solution to fix the problem.
-        - If the tool itself seems to be the issue, use the `get_alternative_tools` tool to suggest other options.
-        - Be practical and confident in your analysis, but acknowledge uncertainty when the cause is not clear.
-        """
+        prompt_path = Path(__file__).parent / "prompts" / "error_analysis.md"
+        return prompt_path.read_text()
 
     async def get_job_details(self, job_id: int) -> Dict[str, Any]:
         """
