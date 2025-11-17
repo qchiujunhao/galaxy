@@ -268,7 +268,10 @@ class GTNTrainingAgent(BaseGalaxyAgent):
                 # Fallback: If no tutorials found, try direct database search
                 if not response_data.tutorials or len(response_data.tutorials) == 0:
                     log.info("No tutorials in response, falling back to direct search")
-                    fallback_results = self.gtn_db.search(query, limit=5)
+                    if self.gtn_db:  # Additional safety check
+                        fallback_results = self.gtn_db.search(query, limit=5)
+                    else:
+                        fallback_results = []
                     if fallback_results:
                         # Create a new response with the fallback results
                         response_data = GTNSearchResponse(
