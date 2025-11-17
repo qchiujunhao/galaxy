@@ -53,6 +53,9 @@ interface Message {
         reasoning: string;
     };
     analysisSteps?: AnalysisStep[];
+    artifacts?: UploadedArtifact[];
+    generatedPlots?: string[];
+    generatedFiles?: string[];
 }
 
 interface ChatHistoryItem {
@@ -109,6 +112,7 @@ const pyodideExecutions = reactive<Record<string, ExecutionState>>({});
 const chatStream = ref<WebSocket | null>(null);
 const streamSupported = typeof window !== "undefined" && typeof WebSocket !== "undefined";
 const deliveredTaskIds = new Set<string>();
+const pyodideTaskToMessage = new Map<string, Message>();
 
 const { renderMarkdown } = useMarkdown({ openLinksInNewPage: true, removeNewlinesAfterList: true });
 const { processingAction, handleAction } = useAgentActions();
@@ -191,7 +195,24 @@ function isLatestAssistantMessage(message: Message): boolean {
 }
 
 
-function appendAssistantMessage(payload: any, fallbackAgentType: string): Message {
+function findMessageForPayload(payload: any): Message | undefined {
+    const candidateTaskId =
+        payload?.task_id ||
+        payload?.pyodide_task_id ||
+        payload?.agent_response?.metadata?.executed_task?.task_id ||
+        payload?.agent_response?.metadata?.pyodide_task?.task_id;
+    if (candidateTaskId && pyodideTaskToMessage.has(String(candidateTaskId))) {
+        return pyodideTaskToMessage.get(String(candidateTaskId));
+    }
+    return undefined;
+}
+
+function populateAssistantMessage(
+    target: Message,
+    payload: any,
+    fallbackAgentType: string,
+    options?: { skipDatasetUpdate?: boolean }
+) {
     const agentResponse = (payload?.agent_response ?? payload?.response?.agent_response) as AgentResponse | undefined;
     const content =
         typeof payload === "string"
@@ -199,35 +220,77 @@ function appendAssistantMessage(payload: any, fallbackAgentType: string): Messag
             : payload?.response ?? agentResponse?.content ?? "No response received";
     const effectiveAgentType = agentResponse?.agent_type || (fallbackAgentType === "auto" ? "router" : fallbackAgentType);
 
-    const assistantMessage: Message = {
-        id: generateId(),
-        role: "assistant",
-        content,
-        timestamp: new Date(),
-        agentType: effectiveAgentType,
-        confidence: agentResponse?.confidence || (payload?.confidence as string) || "medium",
-        feedback: null,
-        agentResponse,
-        suggestions: agentResponse?.suggestions || [],
-        routingInfo: payload?.routing_info,
-    };
+    target.content = content;
+    target.timestamp = payload?.timestamp ? new Date(payload.timestamp) : new Date();
+    target.agentType = effectiveAgentType;
+    target.confidence = agentResponse?.confidence || (payload?.confidence as string) || "medium";
+    target.feedback = target.feedback ?? null;
+    target.agentResponse = agentResponse;
+    target.suggestions = agentResponse?.suggestions || [];
+    target.routingInfo = payload?.routing_info;
 
     const metadata = agentResponse?.metadata as Record<string, unknown> | undefined;
     if (metadata) {
         const steps = normaliseAnalysisSteps((metadata as any)?.analysis_steps);
         if (steps.length) {
-            assistantMessage.analysisSteps = steps;
+            target.analysisSteps = steps;
+        }
+        const artifactSource = (metadata as any)?.artifacts ?? (metadata as any)?.execution?.artifacts;
+        const storedArtifacts = normaliseArtifactList(artifactSource);
+        updateMessageOutputsFromArtifacts(target, storedArtifacts);
+        const pyodideStatus = (metadata as any)?.pyodide_status;
+        const shouldShowOutputs = storedArtifacts.length > 0 || pyodideStatus === "completed";
+        if (shouldShowOutputs) {
+            const plotEntries = normalisePathList((metadata as any)?.plots);
+            target.generatedPlots = plotEntries.length ? plotEntries : undefined;
+            const fileEntries = normalisePathList((metadata as any)?.files);
+            target.generatedFiles = fileEntries.length ? fileEntries : undefined;
+        } else {
+            target.generatedPlots = undefined;
+            target.generatedFiles = undefined;
+        }
+        const executedTask = (metadata as any)?.executed_task;
+        if (executedTask?.task_id) {
+            const taskId = String(executedTask.task_id);
+            deliveredTaskIds.add(taskId);
+            pyodideTaskToMessage.set(taskId, target);
+        }
+        const pendingTask = (metadata as any)?.pyodide_task;
+        if (pendingTask?.task_id) {
+            pyodideTaskToMessage.set(String(pendingTask.task_id), target);
         }
     }
+
+    if (!options?.skipDatasetUpdate) {
+        if (Array.isArray(payload?.dataset_ids) && payload.dataset_ids.length > 0) {
+            selectedDatasets.value = payload.dataset_ids.map(String);
+        }
+    }
+}
+
+function appendAssistantMessage(payload: any, fallbackAgentType: string): Message {
+    const existingMessage = findMessageForPayload(payload);
+    if (existingMessage) {
+        populateAssistantMessage(existingMessage, payload, fallbackAgentType, { skipDatasetUpdate: true });
+        return existingMessage;
+    }
+
+    const assistantMessage: Message = {
+        id: generateId(),
+        role: "assistant",
+        content: "",
+        timestamp: new Date(),
+        agentType: fallbackAgentType === "auto" ? "router" : fallbackAgentType,
+        confidence: "medium",
+        feedback: null,
+    };
+
+    populateAssistantMessage(assistantMessage, payload, fallbackAgentType);
 
     messages.value.push(assistantMessage);
 
     if (payload?.exchange_id) {
         currentChatId.value = payload.exchange_id;
-    }
-
-    if (Array.isArray(payload?.dataset_ids) && payload.dataset_ids.length > 0) {
-        selectedDatasets.value = payload.dataset_ids.map(String);
     }
 
     maybeRunPyodideForMessage(assistantMessage);
@@ -245,6 +308,13 @@ function maybeRunPyodideForMessage(message: Message) {
         return;
     }
     const taskKey = task.task_id || message.id;
+    if (task.task_id) {
+        pyodideTaskToMessage.set(String(task.task_id), message);
+    }
+    if (task.task_id && deliveredTaskIds.has(task.task_id)) {
+        metadata.pyodide_status = metadata.pyodide_status || "completed";
+        return;
+    }
     const existing = pyodideExecutions[taskKey];
     if (existing) {
         // Do not retry if we have already completed or errored out.
@@ -336,6 +406,7 @@ function runPyodideTaskForMessage(
             try {
                 uploadedArtifacts = await uploadArtifacts(result.artifacts || []);
                 state.artifacts = uploadedArtifacts;
+                updateMessageOutputsFromArtifacts(message, uploadedArtifacts);
                 await submitPyodideExecutionResult(runnerTask, message, result, uploadedArtifacts);
                 state.status = result.success ? "completed" : "error";
                 if (!result.success && result.error) {
@@ -425,6 +496,11 @@ function handleStreamMessage(event: MessageEvent) {
             }
             if (taskId) {
                 deliveredTaskIds.add(taskId);
+                const existing = pyodideTaskToMessage.get(String(taskId));
+                if (existing) {
+                    populateAssistantMessage(existing, payload.payload, selectedAgentType.value, { skipDatasetUpdate: true });
+                    return;
+                }
             }
             appendAssistantMessage(payload.payload, selectedAgentType.value);
         }
@@ -615,6 +691,115 @@ function formatSize(size?: number): string {
         unitIndex += 1;
     }
     return `${value.toFixed(1)} ${units[unitIndex]}`;
+}
+
+function normalisePathList(raw: unknown): string[] {
+    if (!Array.isArray(raw)) {
+        return [];
+    }
+    const results: string[] = [];
+    const seen = new Set<string>();
+    for (const entry of raw) {
+        const text = String(entry ?? "").trim();
+        if (!text) {
+            continue;
+        }
+        const normalised = text.startsWith("generated_file")
+            ? text
+            : `generated_file/${text.replace(/^\/+/, "")}`;
+        if (!seen.has(normalised)) {
+            seen.add(normalised);
+            results.push(normalised);
+        }
+    }
+    return results;
+}
+
+function normaliseArtifactList(raw: unknown): UploadedArtifact[] {
+    if (!Array.isArray(raw)) {
+        return [];
+    }
+    const artifacts: UploadedArtifact[] = [];
+    for (const entry of raw) {
+        if (!entry || typeof entry !== "object") {
+            continue;
+        }
+        const record = entry as Record<string, any>;
+        const identifier =
+            record.dataset_id || record.name || record.path || record.id || generateId();
+        const downloadUrl = record.download_url ? resolveDownloadUrl(String(record.download_url)) : undefined;
+        artifacts.push({
+            dataset_id: String(identifier),
+            name: record.name ? String(record.name) : undefined,
+            size: typeof record.size === "number" ? record.size : Number(record.size) || undefined,
+            mime_type: record.mime_type ? String(record.mime_type) : undefined,
+            download_url: downloadUrl || "",
+            history_id: record.history_id ? String(record.history_id) : undefined,
+        });
+    }
+    return artifacts;
+}
+
+function normaliseGeneratedEntry(entry: string): string {
+    return entry.replace(/^generated_file\//, "").replace(/^\/+/, "");
+}
+
+function findArtifactForEntry(entry: string, artifacts?: UploadedArtifact[]): UploadedArtifact | undefined {
+    if (!artifacts || artifacts.length === 0) {
+        return undefined;
+    }
+    const normalized = normaliseGeneratedEntry(entry);
+    return artifacts.find((artifact) => {
+        const artifactName = normaliseGeneratedEntry(artifact.name || "");
+        return (
+            artifactName === normalized ||
+            artifactName === entry ||
+            artifact.dataset_id === normalized ||
+            artifact.dataset_id === entry
+        );
+    });
+}
+
+function artifactPreviewUrl(entry: string, artifacts?: UploadedArtifact[]): string | undefined {
+    const match = findArtifactForEntry(entry, artifacts);
+    return match?.download_url || undefined;
+}
+
+function artifactDownloadHandler(entry: string, artifacts?: UploadedArtifact[]) {
+    const match = findArtifactForEntry(entry, artifacts);
+    if (match) {
+        downloadArtifact(match);
+    }
+}
+
+function formatGeneratedEntry(entry: string): string {
+    return entry.replace(/^generated_file\//, "");
+}
+
+function artifactIsDownloadable(entry: string, artifacts?: UploadedArtifact[]): boolean {
+    return Boolean(findArtifactForEntry(entry, artifacts));
+}
+
+function updateMessageOutputsFromArtifacts(message: Message, artifacts: UploadedArtifact[] | undefined) {
+    if (!artifacts || artifacts.length === 0) {
+        return;
+    }
+    message.artifacts = artifacts;
+    const plotNames: string[] = [];
+    const fileNames: string[] = [];
+    for (const artifact of artifacts) {
+        const name = formatGeneratedEntry(artifact.name || artifact.dataset_id || "");
+        if (!name) {
+            continue;
+        }
+        if (artifact.mime_type && artifact.mime_type.startsWith("image/")) {
+            plotNames.push(`generated_file/${name}`);
+        } else {
+            fileNames.push(`generated_file/${name}`);
+        }
+    }
+    message.generatedPlots = plotNames.length ? plotNames : message.generatedPlots;
+    message.generatedFiles = fileNames.length ? fileNames : message.generatedFiles;
 }
 
 
@@ -921,8 +1106,16 @@ async function loadPreviousChat(item: ChatHistoryItem) {
         if (fullConversation && fullConversation.length > 0) {
             // Clear and rebuild messages from full conversation
             messages.value = [];
+            deliveredTaskIds.clear();
+            pyodideTaskToMessage.clear();
 
             fullConversation.forEach((msg: any, index: number) => {
+                if (msg.role === "execution_result") {
+                    if (msg.task_id) {
+                        deliveredTaskIds.add(String(msg.task_id));
+                    }
+                    return;
+                }
                 const message: Message = {
                     id: `hist-${msg.role}-${item.id}-${index}`,
                     role: msg.role as "user" | "assistant",
@@ -943,6 +1136,31 @@ async function loadPreviousChat(item: ChatHistoryItem) {
                         const steps = metadata ? normaliseAnalysisSteps((metadata as any)?.analysis_steps) : [];
                         if (steps.length) {
                             message.analysisSteps = steps;
+                        }
+                        if (metadata) {
+                            const artifactSource = (metadata as any)?.artifacts ?? (metadata as any)?.execution?.artifacts;
+                            const storedArtifacts = normaliseArtifactList(artifactSource);
+                            updateMessageOutputsFromArtifacts(message, storedArtifacts);
+                            const pyodideStatus = (metadata as any)?.pyodide_status;
+                            const shouldShowOutputs = storedArtifacts.length > 0 || pyodideStatus === "completed";
+                            if (shouldShowOutputs) {
+                                const plots = normalisePathList((metadata as any)?.plots);
+                                message.generatedPlots = plots.length ? plots : undefined;
+                                const files = normalisePathList((metadata as any)?.files);
+                                message.generatedFiles = files.length ? files : undefined;
+                            } else {
+                                message.generatedPlots = undefined;
+                                message.generatedFiles = undefined;
+                            }
+                            const executedTask = (metadata as any)?.executed_task;
+                            if (executedTask?.task_id) {
+                                deliveredTaskIds.add(String(executedTask.task_id));
+                                pyodideTaskToMessage.set(String(executedTask.task_id), message);
+                            }
+                            const pendingTask = (metadata as any)?.pyodide_task;
+                            if (pendingTask?.task_id) {
+                                pyodideTaskToMessage.set(String(pendingTask.task_id), message);
+                            }
                         }
                     }
                 }
@@ -998,6 +1216,31 @@ function loadSingleMessageFallback(item: ChatHistoryItem) {
         if (steps.length) {
             assistantMessage.analysisSteps = steps;
         }
+        if (metadata) {
+            const artifactSource = (metadata as any)?.artifacts ?? (metadata as any)?.execution?.artifacts;
+            const storedArtifacts = normaliseArtifactList(artifactSource);
+            updateMessageOutputsFromArtifacts(assistantMessage, storedArtifacts);
+            const pyodideStatus = (metadata as any)?.pyodide_status;
+            const shouldShowOutputs = storedArtifacts.length > 0 || pyodideStatus === "completed";
+            if (shouldShowOutputs) {
+                const plots = normalisePathList((metadata as any)?.plots);
+                assistantMessage.generatedPlots = plots.length ? plots : undefined;
+                const files = normalisePathList((metadata as any)?.files);
+                assistantMessage.generatedFiles = files.length ? files : undefined;
+            } else {
+                assistantMessage.generatedPlots = undefined;
+                assistantMessage.generatedFiles = undefined;
+            }
+            const executedTask = (metadata as any)?.executed_task;
+            if (executedTask?.task_id) {
+                deliveredTaskIds.add(String(executedTask.task_id));
+                pyodideTaskToMessage.set(String(executedTask.task_id), assistantMessage);
+            }
+            const pendingTask = (metadata as any)?.pyodide_task;
+            if (pendingTask?.task_id) {
+                pyodideTaskToMessage.set(String(pendingTask.task_id), assistantMessage);
+            }
+        }
     }
 
     messages.value = [userMessage, assistantMessage];
@@ -1048,6 +1291,9 @@ function startNewChat() {
     ];
     Object.keys(pyodideExecutions).forEach((key) => delete pyodideExecutions[key]);
     currentChatId.value = null;
+    deliveredTaskIds.clear();
+    pyodideTaskToMessage.clear();
+    selectedDatasets.value = [];
     query.value = "";
     errorMessage.value = "";
 }
@@ -1216,8 +1462,96 @@ function formatTime(timestamp: string) {
 
 
 <div class="message-content">
-    <!-- eslint-disable-next-line vue/no-v-html -->
-    <div v-if="message.role === 'assistant'" v-html="renderMarkdown(message.content)" />
+    <template v-if="message.role === 'assistant'">
+        <!-- eslint-disable-next-line vue/no-v-html -->
+        <div v-html="renderMarkdown(message.content)" />
+        <div v-if="message.generatedPlots?.length || message.generatedFiles?.length" class="generated-output mt-2">
+            <div v-if="message.generatedPlots?.length" class="mb-2">
+                <h6 class="mb-1">Generated Plots</h6>
+                <ul class="list-unstyled mb-0 small">
+                    <li v-for="plot in message.generatedPlots" :key="`${message.id}-plot-${plot}`" class="mb-2">
+                        <code>{{ formatGeneratedEntry(plot) }}</code>
+                        <div v-if="artifactPreviewUrl(plot, message.artifacts)" class="mt-1">
+                            <img
+                                :src="artifactPreviewUrl(plot, message.artifacts)"
+                                :alt="formatGeneratedEntry(plot)"
+                                class="plot-preview img-thumbnail"
+                            />
+                        </div>
+                        <button
+                            v-if="artifactIsDownloadable(plot, message.artifacts)"
+                            class="btn btn-link btn-sm p-0 mt-1"
+                            type="button"
+                            @click="artifactDownloadHandler(plot, message.artifacts)"
+                        >
+                            Download
+                        </button>
+                    </li>
+                </ul>
+            </div>
+            <div v-if="message.generatedFiles?.length">
+                <h6 class="mb-1">Generated Files</h6>
+                <ul class="list-unstyled mb-0 small">
+                    <li v-for="file in message.generatedFiles" :key="`${message.id}-file-${file}`">
+                        <code>{{ formatGeneratedEntry(file) }}</code>
+                        <button
+                            v-if="artifactIsDownloadable(file, message.artifacts)"
+                            class="btn btn-link btn-sm p-0 ml-2"
+                            type="button"
+                            @click="artifactDownloadHandler(file, message.artifacts)"
+                        >
+                            Download
+                        </button>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    <div
+        v-if="message.artifacts?.length"
+        class="mt-2"
+    >
+        <h6 class="mb-1">Saved Artifacts</h6>
+        <ul class="list-unstyled mb-0">
+            <li v-for="artifact in message.artifacts" :key="artifact.dataset_id || artifact.name" class="mb-2">
+                <button
+                    v-if="artifact.download_url"
+                    class="btn btn-link btn-sm"
+                    type="button"
+                    @click="downloadArtifact(artifact)"
+                >
+                    {{ artifact.name || artifact.dataset_id }}
+                </button>
+                <span v-else>{{ artifact.name || artifact.dataset_id }}</span>
+                <span v-if="artifact.size" class="text-muted ml-1">({{ formatSize(artifact.size) }})</span>
+                <div v-if="artifact.mime_type && artifact.mime_type.startsWith('image/') && artifact.download_url" class="mt-2">
+                    <img
+                        :src="artifact.download_url"
+                        :alt="artifact.name || 'plot preview'"
+                        class="plot-preview img-thumbnail"
+                    />
+                </div>
+            </li>
+        </ul>
+    </div>
+    <div v-if="message.agentResponse?.metadata?.executed_task?.code" class="mt-2 executed-code">
+        <details open>
+            <summary class="text-muted">Executed Python Code</summary>
+            <pre>{{ message.agentResponse?.metadata?.executed_task?.code }}</pre>
+        </details>
+        <div v-if="message.agentResponse?.metadata?.stdout" class="mt-2">
+            <details open>
+                <summary class="text-muted">Execution Stdout</summary>
+                <pre>{{ message.agentResponse?.metadata?.stdout }}</pre>
+            </details>
+        </div>
+        <div v-if="message.agentResponse?.metadata?.stderr" class="mt-2">
+            <details>
+                <summary class="text-muted">Execution Stderr</summary>
+                <pre class="text-danger">{{ message.agentResponse?.metadata?.stderr }}</pre>
+            </details>
+        </div>
+    </div>
+    </template>
     <div v-else>{{ message.content }}</div>
 </div>
 

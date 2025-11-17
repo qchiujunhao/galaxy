@@ -79,7 +79,7 @@ class DataAnalysisAgent(BaseGalaxyAgent):
             "You are Galaxy's data analysis agent. Generate Python that runs inside Galaxy's sandboxed execution environment."
             " Use the helper functions load_dataset('<alias>') to obtain a pandas DataFrame or get_dataset_path('<alias>') for filesystem paths."
             " Dataset aliases include the dataset ID, original name, and dataset_<index> values listed in the context."
-            " Save any artifacts to outputs_dir/generated_file/ and report concise, well-structured insights."
+            " Save any artifacts to outputs_dir/generated_file/ and immediately print a short summary plus the relative paths for every generated artifact so downstream reasoning can consume real observations."
             " Always return a valid JSON object in your final answer; avoid Python reprs or non-JSON constructs."
         )
 
@@ -183,7 +183,7 @@ class DataAnalysisAgent(BaseGalaxyAgent):
                 pyodide_task.get("packages"),
                 [descriptor.get("id") for descriptor in dataset_descriptors if descriptor.get("id")],
             )
-        elif code and latest_execution_message and last_executed_task:
+        elif latest_execution_message and last_executed_task:
             execution_result = self._format_execution_result(
                 latest_execution_message,
                 alias_map,
@@ -199,10 +199,22 @@ class DataAnalysisAgent(BaseGalaxyAgent):
             requirements = active_plan.requirements or requirements
             normalized_requirements = self._normalize_requirements(requirements)
 
+        artifact_records: List[Dict[str, Any]] = []
+        if execution_result:
+            artifact_records = execution_result.get("artifacts") or []
+        elif latest_execution_message:
+            artifact_records = latest_execution_message.get("artifacts") or []
+        artifact_plots: List[str] = []
+        artifact_files: List[str] = []
+        if artifact_records:
+            artifact_plots, artifact_files = self._categorize_artifacts(artifact_records)
+
         if active_plan.analysis_steps:
             analysis_steps = [dict(step) for step in active_plan.analysis_steps]
         else:
-            base_code = code if (execution_result or pyodide_task) else ""
+            base_code = ""
+            if execution_result or pyodide_task:
+                base_code = code or (last_executed_task.get("code") if last_executed_task else "") or ""
             analysis_steps = self._build_analysis_steps(active_plan.summary, base_code, normalized_requirements)
 
         if pyodide_task:
@@ -226,13 +238,16 @@ class DataAnalysisAgent(BaseGalaxyAgent):
             },
         )
 
+        summary_text = active_plan.summary or ""
+
         dataset_ids_used = [str(entry.get("id")) for entry in dataset_descriptors if entry.get("id")] or list(datasets)
         metadata: Dict[str, Any] = {
             "datasets_used": dataset_ids_used,
-            "summary": active_plan.summary,
+            "summary": summary_text,
             "analysis_steps": analysis_steps,
-            "plots": active_plan.plots,
-            "files": active_plan.files,
+            "plots": artifact_plots or active_plan.plots,
+            "files": artifact_files or active_plan.files,
+            "artifacts": artifact_records,
             "examples_used": bool(self._example_snippets),
             "planner": "dspy",
             "completion_state": self._determine_completion_state(active_plan, execution_result),
@@ -252,16 +267,22 @@ class DataAnalysisAgent(BaseGalaxyAgent):
             metadata["is_complete"] = False
         elif execution_result is not None:
             metadata["execution"] = execution_result
+            normalized_code = self._normalize_code(code) if code else ""
+            metadata_code = normalized_code or (last_executed_task.get("code") if last_executed_task else "") or ""
+            metadata_requirements = (
+                normalized_requirements
+                if normalized_code
+                else (last_executed_task.get("requirements", []) if last_executed_task else normalized_requirements)
+            )
             metadata["executed_task"] = {
                 "task_id": last_executed_task.get("task_id") if last_executed_task else None,
-                "code": self._normalize_code(code),
-                "requirements": normalized_requirements,
+                "code": metadata_code,
+                "requirements": metadata_requirements,
                 "datasets": dataset_descriptors,
                 "alias_map": alias_map,
             }
             metadata["stdout"] = execution_result.get("stdout", "")
             metadata["stderr"] = execution_result.get("stderr", "")
-            metadata["artifacts"] = execution_result.get("artifacts", [])
             metadata["pyodide_status"] = "completed" if execution_result.get("success") else "error"
             metadata["is_complete"] = execution_result.get("success")
             metadata["pyodide_context"] = {
@@ -299,13 +320,13 @@ class DataAnalysisAgent(BaseGalaxyAgent):
             )
 
         if execution_result and execution_result.get("success"):
-            content = self._build_content_from_execution(active_plan.summary, execution_result)
+            content = self._build_content_from_execution(summary_text, execution_result)
             confidence = "high"
         elif execution_result:
-            content = self._build_content_from_execution(active_plan.summary, execution_result)
+            content = self._build_content_from_execution(summary_text, execution_result)
             confidence = "low"
         elif pyodide_task:
-            summary_text = active_plan.summary.strip() if active_plan.summary else ""
+            summary_text = summary_text.strip()
             content = (
                 f"{summary_text}\n\nExecuting generated Python in the browser..."
                 if summary_text
@@ -755,11 +776,13 @@ class DataAnalysisAgent(BaseGalaxyAgent):
 
         stdout_value = execution_result.get("stdout", "").strip()
         stderr_value = execution_result.get("stderr", "").strip()
+        error_message = execution_result.get("error", "")
 
-        if stdout_value:
-            segments.append(f"STDOUT:\n{self._truncate_output(stdout_value)}")
-        if stderr_value and not execution_result.get("success", False):
-            segments.append(f"STDERR:\n{self._truncate_output(stderr_value)}")
+        if not execution_result.get("success", False):
+            if stderr_value:
+                segments.append(f"Execution error:\n{self._truncate_output(stderr_value)}")
+            elif error_message:
+                segments.append(f"Execution error:\n{self._truncate_output(str(error_message))}")
 
         if not segments:
             segments.append("Generated analysis code executed successfully." if execution_result.get("success") else "Generated analysis code failed.")
@@ -809,6 +832,23 @@ class DataAnalysisAgent(BaseGalaxyAgent):
         if len(text) <= limit:
             return text
         return text[:limit].rstrip() + "\n..."
+
+    def _categorize_artifacts(self, artifacts: List[Dict[str, Any]]) -> Tuple[List[str], List[str]]:
+        plot_paths: List[str] = []
+        file_paths: List[str] = []
+        seen: set[str] = set()
+        for artifact in artifacts or []:
+            name = str(artifact.get("name") or artifact.get("path") or "").strip()
+            if not name:
+                continue
+            normalized = name if name.startswith("generated_file") else f"generated_file/{name}"
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            mime = str(artifact.get("mime_type") or "").lower()
+            target = plot_paths if mime.startswith("image/") else file_paths
+            target.append(normalized)
+        return plot_paths, file_paths
 
     def _should_enqueue_execution(
         self,
