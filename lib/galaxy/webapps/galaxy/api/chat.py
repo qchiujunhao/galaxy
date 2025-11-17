@@ -33,6 +33,7 @@ from starlette.responses import StreamingResponse
 from galaxy.config import GalaxyAppConfiguration
 from galaxy.exceptions import ConfigurationError
 from galaxy.managers.agents import AgentService
+from galaxy.managers.collections_util import api_payload_to_create_params
 from galaxy.managers.chat import ChatManager
 from galaxy.managers.context import ProvidesUserContext
 from galaxy.managers.jobs import JobManager
@@ -686,6 +687,16 @@ class ChatAPI:
 
         import json
 
+        if payload.artifacts:
+            try:
+                collection_info = self._create_artifact_collection(
+                    trans, payload.artifacts, payload.metadata.get("original_query")
+                )
+                if collection_info:
+                    payload.metadata["artifacts_collection"] = collection_info
+            except Exception as exc:  # pragma: no cover - best effort logging
+                log.warning("Unable to aggregate artifacts into collection: %s", exc)
+
         execution_message = json.dumps(
             {
                 "role": "execution_result",
@@ -798,6 +809,62 @@ class ChatAPI:
         )
 
         return response_payload
+
+    def _create_artifact_collection(
+        self,
+        trans: ProvidesUserContext,
+        artifacts: List[Dict[str, Any]],
+        query_text: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        history = trans.history
+        if not history or not artifacts or len(artifacts) < 2:
+            return None
+
+        element_identifiers: List[Dict[str, str]] = []
+        used_names: set[str] = set()
+        for index, artifact in enumerate(artifacts, start=1):
+            dataset_id = artifact.get("dataset_id")
+            if not dataset_id:
+                continue
+            base_name = (artifact.get("name") or f"artifact_{index}").strip() or f"artifact_{index}"
+            candidate = base_name
+            suffix = 1
+            while candidate in used_names:
+                suffix += 1
+                candidate = f"{base_name}_{suffix}"
+            used_names.add(candidate)
+            element_identifiers.append({"name": candidate, "src": "hda", "id": dataset_id})
+
+        if len(element_identifiers) < 2:
+            return None
+
+        base_name = (query_text or "Chat artifacts").strip()
+        words = base_name.split()
+        if len(words) > 10:
+            base_name = " ".join(words[:10])
+        if not base_name:
+            base_name = "Chat artifacts"
+
+        payload = {
+            "collection_type": "list",
+            "name": base_name,
+            "hide_source_items": True,
+            "element_identifiers": element_identifiers,
+        }
+        create_params = api_payload_to_create_params(payload)
+        dataset_collection_manager = trans.app.dataset_collection_manager
+        collection_instance = dataset_collection_manager.create(
+            trans,
+            parent=history,
+            history=history,
+            **create_params,
+        )
+        trans.sa_session.flush()
+        return {
+            "id": trans.security.encode_id(collection_instance.id),
+            "name": collection_instance.name,
+            "elements": len(element_identifiers),
+        }
 
     def _ensure_ai_configured(self):
         """Ensure AI libraries are available and configured"""
