@@ -5,6 +5,7 @@ import json
 import logging
 import mimetypes
 import os
+from datetime import datetime, timezone
 from typing import (
     Annotated,
     Any,
@@ -37,7 +38,7 @@ from galaxy.managers.collections_util import api_payload_to_create_params
 from galaxy.managers.chat import ChatManager
 from galaxy.managers.context import ProvidesUserContext
 from galaxy.managers.jobs import JobManager
-from galaxy.model import HistoryDatasetAssociation, User
+from galaxy.model import ChatExchangeMessage, HistoryDatasetAssociation, User
 from galaxy.schema.agents import (
     AgentListResponse,
     AgentQueryRequest,
@@ -183,6 +184,15 @@ class ChatAPI:
     chat_manager: ChatManager = depends(ChatManager)
     job_manager: JobManager = depends(JobManager)
     agent_service: AgentService = depends(AgentService)
+
+    @property
+    def pyodide_timeout_seconds(self) -> int:
+        raw_value = getattr(self.config, "chat_pyodide_timeout_seconds", 600)
+        try:
+            timeout = int(raw_value)
+        except (TypeError, ValueError):
+            timeout = 600
+        return max(timeout, 0)
 
     @router.post("/api/chat")
     async def query(
@@ -465,6 +475,14 @@ class ChatAPI:
                             "dataset_ids": data.get("dataset_ids", []),
                         }
                     )
+                    assistant_payload = messages[-1]
+                    agent_response = assistant_payload.get("agent_response")
+                    if isinstance(agent_response, dict):
+                        metadata = agent_response.get("metadata")
+                        if isinstance(metadata, dict):
+                            self._expire_stale_pyodide_task(metadata, msg.create_time)
+                            self._ensure_pyodide_completion_state(metadata)
+                        self._refresh_artifact_download_urls(trans, agent_response)
                 elif data.get("role") == "execution_result":
                     messages.append(
                         {
@@ -478,6 +496,7 @@ class ChatAPI:
                             "timestamp": msg.create_time.isoformat() if msg.create_time else None,
                         }
                     )
+                    self._refresh_artifact_download_urls(trans, messages[-1])
             except (json.JSONDecodeError, AttributeError):
                 # Fallback for non-JSON messages
                 messages.append(
@@ -709,6 +728,16 @@ class ChatAPI:
             }
         )
         self.chat_manager.add_message(trans, exchange_id, execution_message)
+        try:
+            self._apply_execution_result_to_exchange(trans, exchange_id, payload)
+        except Exception as exc:  # pragma: no cover - protective path
+            log.warning(
+                "Unable to merge execution metadata into exchange %s for task %s: %s",
+                exchange_id,
+                payload.task_id,
+                exc,
+                exc_info=True,
+            )
 
         conversation_history = self.chat_manager.get_chat_history(trans, exchange_id, format_for_pydantic_ai=False)
 
@@ -826,6 +855,11 @@ class ChatAPI:
             dataset_id = artifact.get("dataset_id")
             if not dataset_id:
                 continue
+            try:
+                decoded_id = trans.security.decode_id(dataset_id)
+            except Exception:
+                log.warning("Failed to decode dataset id '%s' while building artifact collection", dataset_id)
+                continue
             base_name = (artifact.get("name") or f"artifact_{index}").strip() or f"artifact_{index}"
             candidate = base_name
             suffix = 1
@@ -833,7 +867,7 @@ class ChatAPI:
                 suffix += 1
                 candidate = f"{base_name}_{suffix}"
             used_names.add(candidate)
-            element_identifiers.append({"name": candidate, "src": "hda", "id": dataset_id})
+            element_identifiers.append({"name": candidate, "src": "hda", "id": decoded_id})
 
         if len(element_identifiers) < 2:
             return None
@@ -865,6 +899,173 @@ class ChatAPI:
             "name": collection_instance.name,
             "elements": len(element_identifiers),
         }
+
+    def _refresh_artifact_download_urls(self, trans: ProvidesUserContext, payload: Any) -> Any:
+        if isinstance(payload, dict):
+            for key, value in list(payload.items()):
+                if key == "artifacts" and isinstance(value, list):
+                    payload[key] = [self._refresh_single_artifact_entry(trans, entry) for entry in value]
+                else:
+                    self._refresh_artifact_download_urls(trans, value)
+        elif isinstance(payload, list):
+            for item in payload:
+                self._refresh_artifact_download_urls(trans, item)
+        return payload
+
+    def _refresh_single_artifact_entry(self, trans: ProvidesUserContext, artifact: Any) -> Any:
+        if not isinstance(artifact, dict):
+            return artifact
+        entry = dict(artifact)
+        dataset_id = entry.get("dataset_id")
+        if dataset_id:
+            try:
+                entry["download_url"] = self.agent_service._dataset_download_url(trans, dataset_id)
+            except Exception:  # pragma: no cover - best effort
+                log.warning("Unable to refresh download URL for dataset %s", dataset_id)
+        return entry
+
+    def _apply_execution_result_to_exchange(
+        self,
+        trans: ProvidesUserContext,
+        exchange_id: int,
+        payload: PyodideResultPayload,
+    ) -> None:
+        if not payload.task_id:
+            return
+        exchange = self.chat_manager.get_exchange_by_id(trans, exchange_id)
+        if not exchange:
+            return
+
+        target: Optional[ChatExchangeMessage] = None
+        target_payload: Optional[Dict[str, Any]] = None
+        task_id = str(payload.task_id)
+
+        for message in reversed(exchange.messages):
+            raw = getattr(message, "message", None)
+            if not raw:
+                continue
+            try:
+                data = json.loads(raw)
+            except (json.JSONDecodeError, TypeError, AttributeError):
+                continue
+            agent_response = data.get("agent_response")
+            metadata = agent_response.get("metadata") if isinstance(agent_response, dict) else None
+            if not isinstance(metadata, dict):
+                continue
+            candidate_id = self._extract_task_id(metadata)
+            if candidate_id and candidate_id == task_id:
+                target = message
+                target_payload = data
+                break
+
+        if not target or not target_payload:
+            return
+
+        agent_response = target_payload.get("agent_response") or {}
+        metadata = agent_response.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            return
+
+        self._merge_execution_metadata(metadata, payload)
+        agent_response["metadata"] = metadata
+        target_payload["agent_response"] = agent_response
+        target.message = json.dumps(target_payload)
+        trans.sa_session.add(target)
+        trans.sa_session.commit()
+
+    def _extract_task_id(self, metadata: Dict[str, Any]) -> Optional[str]:
+        if not isinstance(metadata, dict):
+            return None
+        pyodide_task = metadata.get("pyodide_task")
+        if isinstance(pyodide_task, dict):
+            candidate = pyodide_task.get("task_id")
+            if candidate:
+                return str(candidate)
+        executed_task = metadata.get("executed_task")
+        if isinstance(executed_task, dict):
+            candidate = executed_task.get("task_id")
+            if candidate:
+                return str(candidate)
+        return None
+
+    def _merge_execution_metadata(self, metadata: Dict[str, Any], payload: PyodideResultPayload) -> None:
+        metadata["pyodide_status"] = "completed" if payload.success else "error"
+        metadata["stdout"] = payload.stdout or ""
+        metadata["stderr"] = payload.stderr or ""
+        metadata["execution"] = {
+            "success": payload.success,
+            "stdout": payload.stdout or "",
+            "stderr": payload.stderr or "",
+            "artifacts": payload.artifacts or [],
+            "task_id": payload.task_id,
+        }
+
+        executed_task: Dict[str, Any] = {}
+        if isinstance(metadata.get("executed_task"), dict):
+            executed_task.update(metadata.get("executed_task") or {})
+        pyodide_task = metadata.get("pyodide_task")
+        if isinstance(pyodide_task, dict):
+            executed_task.setdefault("code", pyodide_task.get("code"))
+            executed_task.setdefault("requirements", pyodide_task.get("packages"))
+            executed_task.setdefault("datasets", pyodide_task.get("files"))
+            executed_task.setdefault("alias_map", pyodide_task.get("alias_map"))
+        if executed_task:
+            executed_task["task_id"] = payload.task_id
+            metadata["executed_task"] = executed_task
+        metadata.pop("pyodide_task", None)
+
+        if payload.artifacts:
+            metadata["artifacts"] = payload.artifacts
+
+    def _expire_stale_pyodide_task(self, metadata: Dict[str, Any], created_at: Optional[datetime]) -> None:
+        timeout = self.pyodide_timeout_seconds
+        if timeout <= 0:
+            return
+        if not metadata or not isinstance(metadata, dict):
+            return
+        if "pyodide_task" not in metadata:
+            return
+        status = metadata.get("pyodide_status") or "pending"
+        if status not in (None, "pending"):
+            return
+        reference = metadata.get("pyodide_started_at")
+        started_at = self._parse_iso_datetime(reference) if isinstance(reference, str) else None
+        if started_at is None and isinstance(created_at, datetime):
+            started_at = created_at
+        if started_at is None:
+            return
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        if (now - started_at).total_seconds() < timeout:
+            return
+        metadata["pyodide_status"] = "timeout"
+        metadata["pyodide_timeout_reason"] = (
+            metadata.get("pyodide_timeout_reason") or "Timed out waiting for the browser execution result."
+        )
+        metadata["pyodide_timeout_seconds"] = timeout
+        metadata.pop("pyodide_task", None)
+
+    def _parse_iso_datetime(self, value: str) -> Optional[datetime]:
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+
+    def _ensure_pyodide_completion_state(self, metadata: Dict[str, Any]) -> None:
+        if not isinstance(metadata, dict):
+            return
+        status = metadata.get("pyodide_status")
+        if status in ("completed", "error", "timeout"):
+            return
+        execution = metadata.get("execution")
+        if isinstance(execution, dict):
+            success = bool(execution.get("success", False))
+            metadata["pyodide_status"] = "completed" if success else "error"
+            metadata.pop("pyodide_task", None)
+            return
+        if metadata.get("artifacts") and not metadata.get("pyodide_task"):
+            metadata["pyodide_status"] = "completed"
 
     def _ensure_ai_configured(self):
         """Ensure AI libraries are available and configured"""

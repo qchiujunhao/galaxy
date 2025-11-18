@@ -15,7 +15,7 @@ import os
 import re
 import tempfile
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -202,12 +202,16 @@ class DataAnalysisAgent(BaseGalaxyAgent):
         artifact_records: List[Dict[str, Any]] = []
         if execution_result:
             artifact_records = execution_result.get("artifacts") or []
-        elif latest_execution_message:
+        elif latest_execution_message and not pyodide_task:
             artifact_records = latest_execution_message.get("artifacts") or []
         artifact_plots: List[str] = []
         artifact_files: List[str] = []
         if artifact_records:
             artifact_plots, artifact_files = self._categorize_artifacts(artifact_records)
+        if pyodide_task:
+            artifact_records = []
+            artifact_plots = []
+            artifact_files = []
 
         if active_plan.analysis_steps:
             analysis_steps = [dict(step) for step in active_plan.analysis_steps]
@@ -245,8 +249,10 @@ class DataAnalysisAgent(BaseGalaxyAgent):
             "datasets_used": dataset_ids_used,
             "summary": summary_text,
             "analysis_steps": analysis_steps,
-            "plots": artifact_plots or active_plan.plots,
-            "files": artifact_files or active_plan.files,
+            "plots": artifact_plots,
+            "files": artifact_files,
+            "expected_plots": active_plan.plots,
+            "expected_files": active_plan.files,
             "artifacts": artifact_records,
             "examples_used": bool(self._example_snippets),
             "planner": "dspy",
@@ -259,6 +265,7 @@ class DataAnalysisAgent(BaseGalaxyAgent):
         if pyodide_task:
             metadata["pyodide_task"] = pyodide_task
             metadata["pyodide_status"] = "pending"
+            metadata["pyodide_started_at"] = datetime.now(timezone.utc).isoformat()
             metadata["pyodide_context"] = {
                 "alias_map": alias_map,
                 "datasets": dataset_descriptors,

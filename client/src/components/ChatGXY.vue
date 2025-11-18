@@ -13,6 +13,7 @@ import {
 import { FontAwesomeIcon } from "@fortawesome/vue-fontawesome";
 import { BSkeleton } from "bootstrap-vue";
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { storeToRefs } from "pinia";
 
 import { GalaxyApi } from "@/api";
 import { getAppRoot } from "@/onload/loadConfig";
@@ -24,6 +25,8 @@ import { errorMessageAsString } from "@/utils/simple-error";
 
 import ActionCard from "./ChatGXY/ActionCard.vue";
 import LoadingSpan from "@/components/LoadingSpan.vue";
+import { useHistoryItemsStore } from "@/stores/historyItemsStore";
+import { useHistoryStore } from "@/stores/historyStore";
 
 library.add(faThumbsUp, faThumbsDown, faPaperPlane, faUser, faMagic, faHistory, faTrash, faClock);
 
@@ -101,6 +104,7 @@ const datasetOptions = ref<DatasetOption[]>([]);
 const selectedDatasets = ref<string[]>([]);
 const loadingDatasets = ref(false);
 const datasetError = ref("");
+let pendingDatasetRefresh = false;
 
 const selectedDatasetRecords = computed(() =>
     datasetOptions.value.filter((dataset) => selectedDatasets.value.includes(dataset.id))
@@ -113,6 +117,10 @@ const chatStream = ref<WebSocket | null>(null);
 const streamSupported = typeof window !== "undefined" && typeof WebSocket !== "undefined";
 const deliveredTaskIds = new Set<string>();
 const pyodideTaskToMessage = new Map<string, Message>();
+const historyItemsStore = useHistoryItemsStore();
+const historyStore = useHistoryStore();
+const { lastUpdateTime } = storeToRefs(historyItemsStore);
+const { currentHistoryId } = storeToRefs(historyStore);
 
 const { renderMarkdown } = useMarkdown({ openLinksInNewPage: true, removeNewlinesAfterList: true });
 const { processingAction, handleAction } = useAgentActions();
@@ -153,6 +161,27 @@ onMounted(async () => {
         });
     }
 });
+
+watch(
+    () => lastUpdateTime.value,
+    () => {
+        if (loadingDatasets.value) {
+            pendingDatasetRefresh = true;
+            return;
+        }
+        loadDatasetOptions();
+    },
+    { immediate: false }
+);
+
+watch(
+    () => currentHistoryId.value,
+    () => {
+        selectedDatasets.value = [];
+        loadDatasetOptions();
+    },
+    { immediate: false }
+);
 
 function generateId() {
     return `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -201,8 +230,27 @@ function findMessageForPayload(payload: any): Message | undefined {
         payload?.pyodide_task_id ||
         payload?.agent_response?.metadata?.executed_task?.task_id ||
         payload?.agent_response?.metadata?.pyodide_task?.task_id;
-    if (candidateTaskId && pyodideTaskToMessage.has(String(candidateTaskId))) {
-        return pyodideTaskToMessage.get(String(candidateTaskId));
+    if (candidateTaskId) {
+        const key = String(candidateTaskId);
+        if (pyodideTaskToMessage.has(key)) {
+            return pyodideTaskToMessage.get(key);
+        }
+        const fallback = messages.value.find((message) => {
+            const metadata = message.agentResponse?.metadata as Record<string, any> | undefined;
+            if (!metadata) {
+                return false;
+            }
+            const executedTask = metadata.executed_task;
+            const pendingTask = metadata.pyodide_task;
+            return (
+                (executedTask && String(executedTask.task_id) === key) ||
+                (pendingTask && String(pendingTask.task_id) === key)
+            );
+        });
+        if (fallback) {
+            pyodideTaskToMessage.set(key, fallback);
+            return fallback;
+        }
     }
     return undefined;
 }
@@ -272,6 +320,7 @@ function appendAssistantMessage(payload: any, fallbackAgentType: string): Messag
     const existingMessage = findMessageForPayload(payload);
     if (existingMessage) {
         populateAssistantMessage(existingMessage, payload, fallbackAgentType, { skipDatasetUpdate: true });
+        maybeRunPyodideForMessage(existingMessage);
         return existingMessage;
     }
 
@@ -326,14 +375,22 @@ function maybeRunPyodideForMessage(message: Message) {
     }
 
     const status = metadata.pyodide_status as string | undefined;
-    if (status === "error" || status === "completed") {
-        pyodideExecutions[taskKey] = {
-            status,
+    if (status === "error" || status === "completed" || status === "timeout") {
+        delete metadata.pyodide_task;
+        const baseState: ExecutionState = {
+            status: status === "completed" ? "completed" : "error",
             stdout: metadata.stdout || "",
             stderr: metadata.stderr || "",
             artifacts: [],
-            errorMessage: status === "error" ? metadata.error || "" : undefined,
-        } as ExecutionState;
+        };
+        if (status === "error") {
+            baseState.errorMessage = metadata.error || "";
+        } else if (status === "timeout") {
+            baseState.errorMessage =
+                metadata.pyodide_timeout_reason ||
+                `Execution timed out after ${metadata.pyodide_timeout_seconds || "unknown"} seconds.`;
+        }
+        pyodideExecutions[taskKey] = baseState;
         return;
     }
     if (status && status !== "pending") {
@@ -408,6 +465,13 @@ function runPyodideTaskForMessage(
                 state.artifacts = uploadedArtifacts;
                 updateMessageOutputsFromArtifacts(message, uploadedArtifacts);
                 await submitPyodideExecutionResult(runnerTask, message, result, uploadedArtifacts);
+                applyExecutionResultMetadata(message, {
+                    success: result.success,
+                    stdout: result.stdout,
+                    stderr: result.stderr,
+                    artifacts: serializeUploadedArtifacts(uploadedArtifacts),
+                    task_id: runnerTask.task_id,
+                });
                 state.status = result.success ? "completed" : "error";
                 if (!result.success && result.error) {
                     state.errorMessage = result.error;
@@ -418,6 +482,9 @@ function runPyodideTaskForMessage(
                 state.status = "error";
                 state.errorMessage = errMessage;
                 metadata.pyodide_status = "error";
+                if (metadata.pyodide_task) {
+                    delete metadata.pyodide_task;
+                }
                 toast.error(`Pyodide execution failed: ${errMessage}`);
             }
         })
@@ -432,6 +499,9 @@ function runPyodideTaskForMessage(
             state.status = "error";
             state.errorMessage = errMessage;
             metadata.pyodide_status = "error";
+            if (metadata.pyodide_task) {
+                delete metadata.pyodide_task;
+            }
             toast.error(`Pyodide execution failed: ${errMessage}`);
         });
 }
@@ -503,6 +573,7 @@ function handleStreamMessage(event: MessageEvent) {
                 const existing = pyodideTaskToMessage.get(String(taskId));
                 if (existing) {
                     populateAssistantMessage(existing, payload.payload, selectedAgentType.value, { skipDatasetUpdate: true });
+                    maybeRunPyodideForMessage(existing);
                     return;
                 }
             }
@@ -807,6 +878,16 @@ function updateMessageOutputsFromArtifacts(message: Message, artifacts: Uploaded
     message.generatedPlots = plotNames.length ? plotNames : message.generatedPlots;
     message.generatedFiles = fileNames.length ? fileNames : message.generatedFiles;
 }
+function serializeUploadedArtifacts(artifacts: UploadedArtifact[] = []): any[] {
+    return artifacts.map((artifact) => ({
+        dataset_id: artifact.dataset_id,
+        name: artifact.name,
+        size: artifact.size,
+        mime_type: artifact.mime_type,
+        download_url: artifact.download_url,
+        history_id: artifact.history_id,
+    }));
+}
 
 function applyExecutionResultMetadata(message: Message, execResult: any) {
     if (!execResult) {
@@ -838,7 +919,7 @@ function applyExecutionResultMetadata(message: Message, execResult: any) {
         pyodideTaskToMessage.set(String(execResult.task_id), message);
         deliveredTaskIds.add(String(execResult.task_id));
     }
-    if (metadata.pyodide_task && execResult.success) {
+    if (metadata.pyodide_task) {
         delete metadata.pyodide_task;
     }
     const artifacts = normaliseArtifactList(execResult.artifacts);
@@ -891,12 +972,16 @@ async function loadDatasetOptions() {
     datasetError.value = "";
 
     try {
+        const queryParams: Record<string, string | number> = {
+            limit: 200,
+            order: "update_time-dsc",
+        };
+        if (currentHistoryId.value) {
+            queryParams.history_id = currentHistoryId.value;
+        }
         const { data, error } = await GalaxyApi().GET("/api/datasets", {
             params: {
-                query: {
-                    limit: 200,
-                    order: "update_time-dsc",
-                },
+                query: queryParams,
             },
         });
 
@@ -922,12 +1007,18 @@ async function loadDatasetOptions() {
                     return { id, name, extension, size: Number.isFinite(size) ? size : undefined };
                 })
                 .filter((entry): entry is DatasetOption => Boolean(entry));
+            const validIds = new Set(datasetOptions.value.map((entry) => entry.id));
+            selectedDatasets.value = selectedDatasets.value.filter((id) => validIds.has(id));
         }
     } catch (e) {
         datasetError.value = errorMessageAsString(e, "Failed to load datasets");
         datasetOptions.value = [];
     } finally {
         loadingDatasets.value = false;
+        if (pendingDatasetRefresh) {
+            pendingDatasetRefresh = false;
+            loadDatasetOptions();
+        }
     }
 }
 
@@ -1097,6 +1188,15 @@ function getAgentDescription(agentType?: string) {
     return descriptions[agentType as keyof typeof descriptions] || "General AI assistance";
 }
 
+function isAwaitingExecution(message: Message): boolean {
+    const metadata = message.agentResponse?.metadata as Record<string, unknown> | undefined;
+    if (!metadata) {
+        return false;
+    }
+    const status = typeof metadata.pyodide_status === "string" ? metadata.pyodide_status : undefined;
+    return Boolean(status && status !== "completed" && status !== "error" && status !== "timeout");
+}
+
 async function loadChatHistory() {
     loadingHistory.value = true;
     try {
@@ -1159,6 +1259,7 @@ async function loadPreviousChat(item: ChatHistoryItem) {
             const taskIdToMessage: Record<string, Message> = {};
             const pendingExecResults: Record<string, any> = {};
 
+            const assistantMessagesToReplay: Message[] = [];
             fullConversation.forEach((msg: any, index: number) => {
                 if (msg.role === "execution_result") {
                     if (msg.task_id) {
@@ -1237,11 +1338,12 @@ async function loadPreviousChat(item: ChatHistoryItem) {
                 messages.value.push(message);
 
                 if (msg.role === "assistant") {
-                    maybeRunPyodideForMessage(message);
+                    assistantMessagesToReplay.push(message);
                 }
             });
 
             applyDatasetSelectionFromMessages(fullConversation);
+            assistantMessagesToReplay.forEach((assistantMessage) => maybeRunPyodideForMessage(assistantMessage));
         } else {
             // Fallback to single message if no full conversation available
             loadSingleMessageFallback(item);
@@ -1529,6 +1631,19 @@ function formatTime(timestamp: string) {
                         </div>
                     </div>
 
+                    <div
+                        v-if="message.role === 'assistant' && isAwaitingExecution(message)"
+                        class="alert alert-warning pyodide-hint mb-2"
+                    >
+                        ⚙️ Analysis still running… please keep this tab open; refreshing will restart the execution.
+                    </div>
+                    <div
+                        v-else-if="message.role === 'assistant' && message.agentResponse?.metadata?.pyodide_status === 'timeout'"
+                        class="alert alert-warning pyodide-hint mb-2"
+                    >
+                        ⚠️ Previous run timed out before the result was sent. Please ask again if you still need this step to
+                        complete.
+                    </div>
 
 <div class="message-content">
     <template v-if="message.role === 'assistant'">
@@ -1890,6 +2005,10 @@ function formatTime(timestamp: string) {
 .pyodide-status {
     border: 1px dashed #6c757d;
     background: #f8f9fa;
+}
+
+.pyodide-hint {
+    font-size: 0.85rem;
 }
 
 .pyodide-status .pyodide-stream {
