@@ -171,6 +171,7 @@ if HAS_DSPY:
                 return
 
             logger = log
+            self._ensure_finish_alias_support(tools_dict)
 
             class _SafeToolDict(dict):
                 def __init__(self, data):
@@ -202,6 +203,32 @@ if HAS_DSPY:
 
             if not isinstance(tools_dict, _SafeToolDict):
                 self.react_agent.tools = _SafeToolDict(tools_dict)
+
+        def _ensure_finish_alias_support(self, tools_dict: Dict[str, dspy.Tool]) -> None:
+            finish_tool = None
+            for name, tool in tools_dict.items():
+                if isinstance(name, str) and name.lower() == "finish":
+                    finish_tool = tool
+                    break
+            if not finish_tool or getattr(finish_tool, "_gxy_finish_wrapped", False):
+                return
+
+            finish_tool.has_kwargs = True
+            alias_fields = ("explanation", "response", "summary", "result", "final_answer")
+            original_func = finish_tool.func
+
+            def _finish_proxy(**kwargs):
+                if "answer" not in kwargs:
+                    for alias in alias_fields:
+                        if alias in kwargs:
+                            new_kwargs = dict(kwargs)
+                            new_kwargs["answer"] = new_kwargs.pop(alias)
+                            kwargs = new_kwargs
+                            break
+                return original_func(**kwargs)
+
+            finish_tool.func = _finish_proxy
+            setattr(finish_tool, "_gxy_finish_wrapped", True)
 
         def forward(self, question, context):
             return self.react_agent(question=question, context=context)
