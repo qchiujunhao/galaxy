@@ -53,7 +53,7 @@ import Login from "entry/analysis/modules/Login";
 import WorkflowEditorModule from "entry/analysis/modules/WorkflowEditor";
 import AdminRoutes from "entry/analysis/routes/admin-routes";
 import LibraryRoutes from "entry/analysis/routes/library-routes";
-import StorageDashboardRoutes from "entry/analysis/routes/storageDashboardRoutes";
+import StorageRoutes from "entry/analysis/routes/storage-routes";
 import { getAppRoot } from "onload/loadConfig";
 import Vue from "vue";
 import VueRouter from "vue-router";
@@ -211,7 +211,7 @@ export function getRouter(Galaxy) {
                 children: [
                     ...AdminRoutes,
                     ...LibraryRoutes,
-                    ...StorageDashboardRoutes,
+                    ...StorageRoutes,
                     {
                         path: "",
                         alias: "root",

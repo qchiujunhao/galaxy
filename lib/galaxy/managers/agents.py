@@ -48,7 +48,6 @@ except ImportError:
     ErrorAnalysisAgent = None
 
 if TYPE_CHECKING:
-    from galaxy.agents.data_analysis_dspy_agent import DataAnalysisDSPyAgent  # pragma: no cover
     from galaxy.agents.dspy_adapter import DSPyPlanResult  # pragma: no cover
 else:  # pragma: no cover - provide dummies when DSPy agent disabled
     DataAnalysisDSPyAgent = Any  # type: ignore[assignment]

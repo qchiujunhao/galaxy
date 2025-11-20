@@ -11,7 +11,6 @@ from .base import (
 )
 from .custom_tool import CustomToolAgent
 from .data_analysis import DataAnalysisAgent
-# from .data_analysis_dspy_agent import DataAnalysisDSPyAgent  # Temporarily disabled; see issue tracker.
 from .dspy_agent import DSPyGalaxyAgent
 from .error_analysis import ErrorAnalysisAgent
 from .gtn_training import GTNTrainingAgent
