@@ -79,7 +79,7 @@ class DataAnalysisAgent(BaseGalaxyAgent):
             "You are Galaxy's data analysis agent. Generate Python that runs inside Galaxy's sandboxed execution environment."
             " Use the helper functions load_dataset('<alias>') to obtain a pandas DataFrame or get_dataset_path('<alias>') for filesystem paths."
             " Dataset aliases include the dataset ID, original name, and dataset_<index> values listed in the context."
-            " Save any artifacts to outputs_dir/generated_file/ and immediately print a short summary plus the relative paths for every generated artifact so downstream reasoning can consume real observations."
+            " Save any artifacts to ``outputs_dir/generated_file/`` and immediately print a short summary plus the relative paths for every generated artifact so downstream reasoning can consume real observations."
             " Always return a valid JSON object in your final answer; avoid Python reprs or non-JSON constructs."
         )
 
