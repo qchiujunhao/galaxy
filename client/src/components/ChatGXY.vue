@@ -59,6 +59,10 @@ interface Message {
     artifacts?: UploadedArtifact[];
     generatedPlots?: string[];
     generatedFiles?: string[];
+    isCollapsible?: boolean;
+    isCollapsed?: boolean;
+    collapsedHistory?: Message[];
+    isPlaceholder?: boolean;
 }
 
 interface ChatHistoryItem {
@@ -99,6 +103,8 @@ const chatHistory = ref<ChatHistoryItem[]>([]);
 const loadingHistory = ref(false);
 const currentChatId = ref<number | null>(null);
 const hasLoadedInitialChat = ref(false);
+const activePlaceholderId = ref<string | null>(null);
+const pendingCollapsedMessages: Message[] = [];
 
 const datasetOptions = ref<DatasetOption[]>([]);
 const selectedDatasets = ref<string[]>([]);
@@ -121,6 +127,10 @@ const historyItemsStore = useHistoryItemsStore();
 const historyStore = useHistoryStore();
 const { lastUpdateTime } = storeToRefs(historyItemsStore);
 const { currentHistoryId } = storeToRefs(historyStore);
+const isChatBusy = computed(
+    () => busy.value || pyodideRunner.isRunning.value || messages.value.some((message) => isAwaitingExecution(message))
+);
+const renderMessages = computed(() => messages.value);
 
 const { renderMarkdown } = useMarkdown({ openLinksInNewPage: true, removeNewlinesAfterList: true });
 const { processingAction, handleAction } = useAgentActions();
@@ -187,6 +197,17 @@ function generateId() {
     return `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 }
 
+function removeActivePlaceholder() {
+    if (!activePlaceholderId.value) {
+        return;
+    }
+    const idx = messages.value.findIndex((msg) => msg.id === activePlaceholderId.value);
+    if (idx !== -1) {
+        messages.value.splice(idx, 1);
+    }
+    activePlaceholderId.value = null;
+}
+
 function applyDatasetSelectionFromMessages(conversation: any[]) {
     for (let i = conversation.length - 1; i >= 0; i -= 1) {
         const entry = conversation[i];
@@ -196,6 +217,20 @@ function applyDatasetSelectionFromMessages(conversation: any[]) {
             return;
         }
     }
+}
+
+function attachPendingCollapsedMessages(target: Message) {
+    if (!pendingCollapsedMessages.length) {
+        return;
+    }
+    target.collapsedHistory = pendingCollapsedMessages.map((msg) => {
+        msg.isCollapsed = true;
+        return msg;
+    });
+    if (target.isCollapsed === undefined) {
+        target.isCollapsed = true;
+    }
+    pendingCollapsedMessages.length = 0;
 }
 
 
@@ -255,6 +290,58 @@ function findMessageForPayload(payload: any): Message | undefined {
     return undefined;
 }
 
+function shouldAutoCollapse(message: Message): boolean {
+    if (message.role !== "assistant") {
+        return false;
+    }
+    if (isAwaitingExecution(message)) {
+        return false;
+    }
+    const metadata = message.agentResponse?.metadata as Record<string, any> | undefined;
+    if (!metadata) {
+        return false;
+    }
+    if (metadata.is_complete === true) {
+        return false;
+    }
+    if (metadata.executed_task || metadata.execution || metadata.pyodide_status === "completed") {
+        return true;
+    }
+    if (metadata.pyodide_status === "error" || metadata.pyodide_status === "timeout") {
+        return true;
+    }
+    return false;
+}
+
+function applyCollapseState(message: Message) {
+    const collapsible = shouldAutoCollapse(message);
+    message.isCollapsible = collapsible;
+    if (!collapsible) {
+        delete message.isCollapsed;
+        return;
+    }
+    if (message.isCollapsed === undefined) {
+        message.isCollapsed = true;
+    }
+}
+
+function collapsedSummary(message: Message): string {
+    const metadata = message.agentResponse?.metadata as Record<string, any> | undefined;
+    if (metadata?.summary && typeof metadata.summary === "string") {
+        return metadata.summary;
+    }
+    const content = (message.content || "").trim();
+    return content.split("\n")[0] || "Previous step";
+}
+
+function handleIntermediateToggle(event: Event, message: Message) {
+    const details = event.target as HTMLDetailsElement | null;
+    if (!details) {
+        return;
+    }
+    message.isCollapsed = !details.open;
+}
+
 function populateAssistantMessage(
     target: Message,
     payload: any,
@@ -286,17 +373,10 @@ function populateAssistantMessage(
         const artifactSource = (metadata as any)?.artifacts ?? (metadata as any)?.execution?.artifacts;
         const storedArtifacts = normaliseArtifactList(artifactSource);
         updateMessageOutputsFromArtifacts(target, storedArtifacts);
-        const pyodideStatus = (metadata as any)?.pyodide_status;
-        const shouldShowOutputs = storedArtifacts.length > 0 || pyodideStatus === "completed";
-        if (shouldShowOutputs) {
-            const plotEntries = normalisePathList((metadata as any)?.plots);
-            target.generatedPlots = plotEntries.length ? plotEntries : undefined;
-            const fileEntries = normalisePathList((metadata as any)?.files);
-            target.generatedFiles = fileEntries.length ? fileEntries : undefined;
-        } else {
-            target.generatedPlots = undefined;
-            target.generatedFiles = undefined;
-        }
+        const plotEntries = normalisePathList((metadata as any)?.plots);
+        target.generatedPlots = plotEntries.length ? plotEntries : undefined;
+        const fileEntries = normalisePathList((metadata as any)?.files);
+        target.generatedFiles = fileEntries.length ? fileEntries : undefined;
         const executedTask = (metadata as any)?.executed_task;
         if (executedTask?.task_id) {
             const taskId = String(executedTask.task_id);
@@ -314,12 +394,18 @@ function populateAssistantMessage(
             selectedDatasets.value = payload.dataset_ids.map(String);
         }
     }
+
+    applyCollapseState(target);
 }
 
 function appendAssistantMessage(payload: any, fallbackAgentType: string): Message {
+    removeActivePlaceholder();
     const existingMessage = findMessageForPayload(payload);
     if (existingMessage) {
         populateAssistantMessage(existingMessage, payload, fallbackAgentType, { skipDatasetUpdate: true });
+        if (!existingMessage.isCollapsible) {
+            attachPendingCollapsedMessages(existingMessage);
+        }
         maybeRunPyodideForMessage(existingMessage);
         return existingMessage;
     }
@@ -335,6 +421,13 @@ function appendAssistantMessage(payload: any, fallbackAgentType: string): Messag
     };
 
     populateAssistantMessage(assistantMessage, payload, fallbackAgentType);
+
+    if (assistantMessage.isCollapsible) {
+        pendingCollapsedMessages.push(assistantMessage);
+        return assistantMessage;
+    }
+
+    attachPendingCollapsedMessages(assistantMessage);
 
     messages.value.push(assistantMessage);
 
@@ -924,6 +1017,7 @@ function applyExecutionResultMetadata(message: Message, execResult: any) {
     }
     const artifacts = normaliseArtifactList(execResult.artifacts);
     updateMessageOutputsFromArtifacts(message, artifacts);
+    applyCollapseState(message);
 }
 
 
@@ -1023,9 +1117,13 @@ async function loadDatasetOptions() {
 }
 
 async function submitQuery() {
+    if (isChatBusy.value) {
+        return;
+    }
     if (!query.value.trim()) {
         return;
     }
+    pendingCollapsedMessages.length = 0;
 
     const userMessage: Message = {
         id: generateId(),
@@ -1042,6 +1140,18 @@ async function submitQuery() {
     // Scroll to bottom after adding user message
     await nextTick();
     scrollToBottom();
+
+    const placeholderMessage: Message = {
+        id: `placeholder-${generateId()}`,
+        role: "assistant",
+        content: "",
+        timestamp: new Date(),
+        agentType: selectedAgentType.value === "auto" ? "router" : selectedAgentType.value,
+        feedback: null,
+        isPlaceholder: true,
+    };
+    messages.value.push(placeholderMessage);
+    activePlaceholderId.value = placeholderMessage.id;
 
     busy.value = true;
     errorMessage.value = "";
@@ -1063,6 +1173,7 @@ async function submitQuery() {
         });
 
         if (error) {
+            removeActivePlaceholder();
             errorMessage.value = errorMessageAsString(error, "Failed to get response from ChatGXY.");
             const errorMsg: Message = {
                 id: generateId(),
@@ -1086,6 +1197,7 @@ async function submitQuery() {
             scrollToBottom();
         }
     } catch (e) {
+        removeActivePlaceholder();
         errorMessage.value = `Unexpected error: ${e}`;
         const errorMsg: Message = {
             id: generateId(),
@@ -1241,6 +1353,7 @@ async function clearHistory() {
 }
 
 async function loadPreviousChat(item: ChatHistoryItem) {
+    pendingCollapsedMessages.length = 0;
     // Try to load the full conversation from the backend
     try {
         const { data: fullConversation } = await GalaxyApi().GET(`/api/chat/exchange/{exchange_id}/messages`, {
@@ -1298,17 +1411,10 @@ async function loadPreviousChat(item: ChatHistoryItem) {
                             const artifactSource = (metadata as any)?.artifacts ?? (metadata as any)?.execution?.artifacts;
                             const storedArtifacts = normaliseArtifactList(artifactSource);
                             updateMessageOutputsFromArtifacts(message, storedArtifacts);
-                            const pyodideStatus = (metadata as any)?.pyodide_status;
-                            const shouldShowOutputs = storedArtifacts.length > 0 || pyodideStatus === "completed";
-                            if (shouldShowOutputs) {
-                                const plots = normalisePathList((metadata as any)?.plots);
-                                message.generatedPlots = plots.length ? plots : undefined;
-                                const files = normalisePathList((metadata as any)?.files);
-                                message.generatedFiles = files.length ? files : undefined;
-                            } else {
-                                message.generatedPlots = undefined;
-                                message.generatedFiles = undefined;
-                            }
+                        const plots = normalisePathList((metadata as any)?.plots);
+                        message.generatedPlots = plots.length ? plots : undefined;
+                        const files = normalisePathList((metadata as any)?.files);
+                        message.generatedFiles = files.length ? files : undefined;
                             const executedTask = (metadata as any)?.executed_task;
                             if (executedTask?.task_id) {
                                 deliveredTaskIds.add(String(executedTask.task_id));
@@ -1335,6 +1441,7 @@ async function loadPreviousChat(item: ChatHistoryItem) {
                     }
                 }
 
+                applyCollapseState(message);
                 messages.value.push(message);
 
                 if (msg.role === "assistant") {
@@ -1391,17 +1498,10 @@ function loadSingleMessageFallback(item: ChatHistoryItem) {
             const artifactSource = (metadata as any)?.artifacts ?? (metadata as any)?.execution?.artifacts;
             const storedArtifacts = normaliseArtifactList(artifactSource);
             updateMessageOutputsFromArtifacts(assistantMessage, storedArtifacts);
-            const pyodideStatus = (metadata as any)?.pyodide_status;
-            const shouldShowOutputs = storedArtifacts.length > 0 || pyodideStatus === "completed";
-            if (shouldShowOutputs) {
-                const plots = normalisePathList((metadata as any)?.plots);
-                assistantMessage.generatedPlots = plots.length ? plots : undefined;
-                const files = normalisePathList((metadata as any)?.files);
-                assistantMessage.generatedFiles = files.length ? files : undefined;
-            } else {
-                assistantMessage.generatedPlots = undefined;
-                assistantMessage.generatedFiles = undefined;
-            }
+            const plots = normalisePathList((metadata as any)?.plots);
+            assistantMessage.generatedPlots = plots.length ? plots : undefined;
+            const files = normalisePathList((metadata as any)?.files);
+            assistantMessage.generatedFiles = files.length ? files : undefined;
             const executedTask = (metadata as any)?.executed_task;
             if (executedTask?.task_id) {
                 deliveredTaskIds.add(String(executedTask.task_id));
@@ -1414,6 +1514,7 @@ function loadSingleMessageFallback(item: ChatHistoryItem) {
         }
     }
 
+    applyCollapseState(assistantMessage);
     messages.value = [userMessage, assistantMessage];
     currentChatId.value = item.id;
     showHistory.value = false;
@@ -1447,6 +1548,7 @@ async function loadLatestChat() {
 }
 
 function startNewChat() {
+    pendingCollapsedMessages.length = 0;
     // Clear messages and reset to welcome message
     messages.value = [
         {
@@ -1496,7 +1598,8 @@ function formatTime(timestamp: string) {
 </script>
 
 <template>
-    <div class="chatgxy-container card">
+    <div class="chatgxy-wrapper">
+        <div class="chatgxy-container card">
         <div class="card-header">
             <div class="d-flex align-items-center justify-content-between">
                 <h3 class="mb-0 d-flex align-items-center">
@@ -1598,7 +1701,7 @@ function formatTime(timestamp: string) {
                 </div>
 
                 <div
-                    v-for="message in messages"
+                    v-for="message in renderMessages"
                     :key="message.id"
                     :class="['message', message.role === 'user' ? 'user-message' : 'assistant-message']">
                     <div class="message-header">
@@ -1646,7 +1749,12 @@ function formatTime(timestamp: string) {
                     </div>
 
 <div class="message-content">
-    <template v-if="message.role === 'assistant'">
+    <template v-if="message.isPlaceholder">
+        <BSkeleton animation="wave" width="85%" />
+        <BSkeleton animation="wave" width="55%" />
+        <BSkeleton animation="wave" width="70%" />
+    </template>
+    <template v-else-if="message.role === 'assistant'">
         <!-- eslint-disable-next-line vue/no-v-html -->
         <div v-html="renderMarkdown(message.content)" />
         <details
@@ -1780,7 +1888,6 @@ function formatTime(timestamp: string) {
             </div>
         </div>
     </div>
-</div>
 
 <div v-if="message.role === 'assistant' && pyodideStateForMessage(message)" class="pyodide-status card mt-2">
     <div class="card-body">
@@ -1827,14 +1934,184 @@ function formatTime(timestamp: string) {
     </div>
 </div>
 
-<!-- Action suggestions for assistant messages -->
-<ActionCard
+                    <div
+                        v-if="message.collapsedHistory && message.collapsedHistory.length"
+                        class="collapsed-history mt-3"
+                    >
+                        <details
+                            class="intermediate-details"
+                            :open="!message.isCollapsed"
+                            @toggle="(event) => handleIntermediateToggle(event, message)"
+                        >
+                            <summary>
+                                <span>Intermediate steps ({{ message.collapsedHistory.length }})</span>
+                                <span class="chip-chevron" :class="{ open: !message.isCollapsed }">›</span>
+                            </summary>
+                            <div class="collapsed-entry-body card card-body mt-3">
+                                <div
+                                    v-for="historyMessage in message.collapsedHistory"
+                                    :key="historyMessage.id"
+                                    class="previous-step mb-4"
+                                >
+                                    <div class="text-muted mb-2">{{ collapsedSummary(historyMessage) }}</div>
+                                    <div class="message-content">
+                                        <div v-html="renderMarkdown(historyMessage.content)" />
+                                        <details
+                                            v-if="
+                                                (historyMessage.generatedPlots?.length || historyMessage.generatedFiles?.length) &&
+                                                !historyMessage.artifacts?.length
+                                            "
+                                            class="generated-panel mt-2"
+                                            open
+                                        >
+                                            <summary class="text-muted">Generated Outputs</summary>
+                                            <div v-if="historyMessage.generatedPlots?.length" class="generated-section">
+                                                <h6 class="mb-1">Plots</h6>
+                                                <div class="generated-grid">
+                                                    <span
+                                                        v-for="plot in historyMessage.generatedPlots"
+                                                        :key="`${historyMessage.id}-plot-${plot}`"
+                                                        class="generated-chip"
+                                                    >
+                                                        <code>{{ formatGeneratedEntry(plot) }}</code>
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <div v-if="historyMessage.generatedFiles?.length" class="generated-section">
+                                                <h6 class="mb-1">Files</h6>
+                                                <div class="generated-grid">
+                                                    <span
+                                                        v-for="file in historyMessage.generatedFiles"
+                                                        :key="`${historyMessage.id}-file-${file}`"
+                                                        class="generated-chip"
+                                                    >
+                                                        <code>{{ formatGeneratedEntry(file) }}</code>
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        </details>
+                                        <div v-if="historyMessage.artifacts?.length" class="mt-2">
+                                            <details open class="artifacts-panel">
+                                                <summary class="text-muted">
+                                                    Saved Artifacts ({{ historyMessage.artifacts.length }})
+                                                </summary>
+                                                <div class="artifact-grid">
+                                                    <div
+                                                        v-for="artifact in historyMessage.artifacts"
+                                                        :key="artifact.dataset_id || artifact.name"
+                                                        class="artifact-grid-item"
+                                                    >
+                                                        <div class="artifact-name">
+                                                            <button
+                                                                v-if="artifact.download_url"
+                                                                class="btn btn-link btn-sm p-0"
+                                                                type="button"
+                                                                @click="downloadArtifact(artifact)"
+                                                            >
+                                                                {{ artifact.name || artifact.dataset_id }}
+                                                            </button>
+                                                            <span v-else>{{ artifact.name || artifact.dataset_id }}</span>
+                                                            <span v-if="artifact.size" class="text-muted ml-1">
+                                                                ({{ formatSize(artifact.size) }})
+                                                            </span>
+                                                        </div>
+                                                        <div
+                                                            v-if="
+                                                                artifact.mime_type &&
+                                                                artifact.mime_type.startsWith('image/') &&
+                                                                artifact.download_url
+                                                            "
+                                                            class="artifact-preview mt-2"
+                                                        >
+                                                            <img
+                                                                :src="artifact.download_url"
+                                                                :alt="artifact.name || 'plot preview'"
+                                                                class="plot-preview img-thumbnail"
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </details>
+                                        </div>
+                                        <div v-if="historyMessage.agentResponse?.metadata?.executed_task?.code" class="mt-2 executed-code">
+                                            <details open>
+                                                <summary class="text-muted">Executed Python Code</summary>
+                                                <pre>{{ historyMessage.agentResponse?.metadata?.executed_task?.code }}</pre>
+                                            </details>
+                                            <div v-if="historyMessage.agentResponse?.metadata?.stdout" class="mt-2">
+                                                <details open>
+                                                    <summary class="text-muted">Execution Stdout</summary>
+                                                    <pre>{{ historyMessage.agentResponse?.metadata?.stdout }}</pre>
+                                                </details>
+                                            </div>
+                                            <div v-if="historyMessage.agentResponse?.metadata?.stderr" class="mt-2">
+                                                <details>
+                                                    <summary class="text-muted">Execution Stderr</summary>
+                                                    <pre class="text-danger">{{ historyMessage.agentResponse?.metadata?.stderr }}</pre>
+                                                </details>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div v-if="historyMessage.analysisSteps?.length" class="analysis-steps card mt-2">
+                                        <div
+                                            v-for="(step, idx) in historyMessage.analysisSteps"
+                                            :key="idx"
+                                            class="analysis-step"
+                                            :class="[step.type, step.status && step.status !== 'pending' ? step.status : '']">
+                                            <div class="analysis-step-header">
+                                                <span class="step-label">
+                                                    {{ step.type === 'thought'
+                                                        ? 'Plan'
+                                                        : step.type === 'action'
+                                                            ? 'Action'
+                                                            : step.type === 'observation'
+                                                                ? 'Observation'
+                                                                : 'Conclusion' }}
+                                                </span>
+                                                <span
+                                                    v-if="step.type === 'action' && step.status && step.status !== 'pending'"
+                                                    class="step-status"
+                                                    :class="step.status">
+                                                    {{ step.status }}
+                                                </span>
+                                                <span
+                                                    v-else-if="step.type === 'observation' && step.success !== undefined"
+                                                    class="step-status"
+                                                    :class="step.success ? 'completed' : 'error'">
+                                                    {{ step.success ? 'success' : 'error' }}
+                                                </span>
+                                            </div>
+                                            <div class="analysis-step-body">
+                                                <pre v-if="step.type === 'action'">{{ step.content }}</pre>
+                                                <div v-else-if="step.type === 'observation'">
+                                                    <div v-if="step.stdout">
+                                                        <small class="text-muted">stdout</small>
+                                                        <pre>{{ step.stdout }}</pre>
+                                                    </div>
+                                                    <div v-if="step.stderr">
+                                                        <small class="text-muted">stderr</small>
+                                                        <pre class="text-danger">{{ step.stderr }}</pre>
+                                                    </div>
+                                                    <div v-if="!step.stdout && !step.stderr">No textual output.</div>
+                                                </div>
+                                                <div v-else>{{ step.content }}</div>
+                                                <div v-if="step.type === 'action' && step.requirements?.length" class="step-requirements">
+                                                    <small class="text-muted">requirements: {{ step.requirements.join(', ') }}</small>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </details>
+                    </div>
+
+                    <!-- Action suggestions for assistant messages -->
+                    <ActionCard
                         v-if="isLatestAssistantMessage(message) && message.suggestions?.length"
                         :suggestions="message.suggestions"
                         :processing-action="processingAction"
                         @handle-action="(action) => handleAction(action, message.agentResponse || {})" />
-
-
 
                     <div
                         v-if="
@@ -1859,18 +2136,8 @@ function formatTime(timestamp: string) {
                         </button>
                         <span v-if="message.feedback" class="feedback-text">Thanks for feedback!</span>
                     </div>
-                </div>
+                    </div>
 
-                <div v-if="busy" class="message assistant-message">
-                    <div class="message-header">
-                        <span class="message-icon">{{ getAgentIcon(selectedAgentType) }}</span>
-                        <span class="message-role">{{ getAgentLabel(selectedAgentType) }}</span>
-                    </div>
-                    <div class="message-content">
-                        <BSkeleton animation="wave" width="85%" />
-                        <BSkeleton animation="wave" width="55%" />
-                        <BSkeleton animation="wave" width="70%" />
-                    </div>
                 </div>
             </div>
         </div>
@@ -1881,14 +2148,20 @@ function formatTime(timestamp: string) {
                 <textarea
                     id="chat-input"
                     v-model="query"
-                    :disabled="busy"
+                    :disabled="isChatBusy"
                     placeholder="Ask me anything about Galaxy..."
                     rows="2"
                     class="form-control chat-input"
                     @keydown.enter.prevent="!$event.shiftKey && submitQuery()" />
-                <button :disabled="busy || !query.trim()" class="btn btn-primary send-button" @click="submitQuery">
-                    <FontAwesomeIcon v-if="!busy" :icon="faPaperPlane" fixed-width />
-                    <LoadingSpan v-else message="" />
+                <button
+                    v-if="!isChatBusy"
+                    :disabled="!query.trim()"
+                    class="btn btn-primary send-button"
+                    @click="submitQuery">
+                    <FontAwesomeIcon :icon="faPaperPlane" fixed-width />
+                </button>
+                <button v-else class="btn btn-primary send-button" disabled>
+                    <LoadingSpan message="" />
                 </button>
             </div>
             <div class="chat-hints">
@@ -1898,11 +2171,19 @@ function formatTime(timestamp: string) {
             </div>
         </div>
     </div>
+</div>
+</div>
 </template>
 
 <style lang="scss" scoped>
+.chatgxy-wrapper {
+    width: 100%;
+    height: calc(100vh - 2rem);
+}
+
 .chatgxy-container {
-    height: 80vh;
+    width: 100%;
+    height: 100%;
     display: flex;
     flex-direction: column;
 
@@ -1932,6 +2213,8 @@ function formatTime(timestamp: string) {
 }
 
 .chat-messages {
+    flex: 1 1 auto;
+    min-width: 0;
     height: 100%;
     overflow-y: auto;
     padding: 1rem;
@@ -2000,6 +2283,44 @@ function formatTime(timestamp: string) {
 
 .analysis-step-body .text-danger {
     color: #dc3545 !important;
+}
+
+.collapsed-history {
+    details {
+        border: 1px solid #dfe3e6;
+        border-radius: 8px;
+        background: #f7f8fa;
+        padding: 0.25rem 0.75rem;
+    }
+
+    summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: #1f2a37;
+        list-style: none;
+        cursor: pointer;
+        padding: 0.25rem 0;
+    }
+
+    summary::-webkit-details-marker {
+        display: none;
+    }
+
+    .chip-chevron {
+        margin-left: 0.75rem;
+        transition: transform 0.2s ease;
+
+        &.open {
+            transform: rotate(90deg);
+        }
+    }
+
+    .collapsed-entry-body {
+        background: #fff;
+    }
 }
 
 .pyodide-status {
