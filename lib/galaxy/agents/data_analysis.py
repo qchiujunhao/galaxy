@@ -23,6 +23,8 @@ from urllib.parse import urlencode
 
 from itsdangerous import URLSafeTimedSerializer
 
+from galaxy import exceptions
+from galaxy.managers.hdas import HDAManager
 from .base import (
     ActionSuggestion,
     ActionType,
@@ -615,8 +617,20 @@ class DataAnalysisAgent(BaseGalaxyAgent):
 
     def _prepare_dataset_aliases(self, dataset_ids: List[str]) -> tuple[Dict[str, str], List[Dict[str, Any]]]:
         trans = getattr(self.deps, "trans", None)
-        if not dataset_ids or not trans or not getattr(trans, "security", None):
+        app = getattr(trans, "app", None)
+        if not dataset_ids or not trans or not getattr(trans, "security", None) or not app:
             return {}, []
+
+        # Prefer the app's HDAManager if available; otherwise construct one when dependencies exist.
+        hda_manager = getattr(app, "hda_manager", None)
+        if hda_manager is None:
+            user_manager = getattr(app, "user_manager", None)
+            ldda_manager = getattr(app, "ldda_manager", None)
+            if user_manager and ldda_manager:
+                hda_manager = HDAManager(app, user_manager, ldda_manager)
+            else:
+                log.warning("HDAManager not available; skipping dataset alias preparation.")
+                return {}, []
 
         alias_map: Dict[str, str] = {}
         log.debug('Preparing dataset aliases', extra={'dataset_ids': dataset_ids})
@@ -626,17 +640,20 @@ class DataAnalysisAgent(BaseGalaxyAgent):
         for index, encoded_id in enumerate(dataset_ids, start=1):
             try:
                 decoded_id = trans.security.decode_id(encoded_id)
-            except Exception:  # pragma: no cover - dependent on encoded input
-                log.warning("Unable to decode dataset id %s", encoded_id)
-                continue
-
-            hda = trans.sa_session.get(HistoryDatasetAssociation, decoded_id)  # type: ignore[attr-defined]
-            if not hda:
-                log.warning("No dataset found for decoded id %s", decoded_id)
-                continue
-
-            if self.deps.user and hda.history and hda.history.user_id != self.deps.user.id:
+                hda = hda_manager.get_accessible(decoded_id, trans.user)
+                ensure_on_disk = getattr(hda_manager, "ensure_dataset_on_disk", None)
+                if callable(ensure_on_disk):
+                    ensure_on_disk(trans, hda)
+                else:
+                    hda_manager.dataset_manager.ensure_dataset_on_disk(trans, hda)
+            except exceptions.ItemAccessibilityException:
                 log.warning("Dataset %s is not accessible to the current user", encoded_id)
+                continue
+            except exceptions.Conflict as exc:
+                log.warning("Dataset %s is not in a usable state: %s", encoded_id, exc)
+                continue
+            except Exception as exc:  # pragma: no cover - defensive guard
+                log.warning("Error preparing dataset %s: %s", encoded_id, exc)
                 continue
 
             file_path = self._get_dataset_file_path(hda)
