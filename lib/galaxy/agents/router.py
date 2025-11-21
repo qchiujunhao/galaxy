@@ -74,6 +74,8 @@ class QueryRouterAgent(BaseGalaxyAgent):
         - For errors, failures, or debugging, route to: **error_analysis**.
         - For creating new tools or tool wrappers, route to: **custom_tool**.
         - For finding tutorials, learning, or "how-to" questions, route to: **gtn_training**.
+        - For exploratory data analysis, statistics, or visualization, route to: **data_analysis**.
+        - (The DSPy-based analysis agent is temporarily unavailable.)
         - For complex, multi-part queries (e.g., "fix my error AND find new tools AND show me a tutorial"), route to: **orchestrator**.
         - For anything else related to finding or using tools, route to: **tool_recommendation**.
 
@@ -107,6 +109,10 @@ class QueryRouterAgent(BaseGalaxyAgent):
                         history_text += f"{role}: {content}\n"
                     history_text += f"\nCurrent query: {query}"
                     full_query = history_text
+
+            if context and context.get("dataset_ids"):
+                datasets = ', '.join(context["dataset_ids"])
+                full_query = f"Selected datasets: {datasets}\n\n{full_query}"
 
             # Use pydantic-ai for all endpoints with retry logic
             result = await self._run_with_retry(full_query)
@@ -146,6 +152,39 @@ class QueryRouterAgent(BaseGalaxyAgent):
             ),
             "custom_tool": (
                 ["create", "build", "make", "wrap", "custom tool", "new tool", "yaml", "xml definition"],
+                1.0,
+            ),
+            # "data_analysis_dspy": (
+            #     [
+            #         "analysis",
+            #         "analyze",
+            #         "visualize",
+            #         "plot",
+            #         "chart",
+            #         "statistics",
+            #         "summary",
+            #         "explore",
+            #         "inspect",
+            #         "pyodide",
+            #         "browser",
+            #     ],
+            #     1.0,
+            # ),
+            "data_analysis": (
+                [
+                    "analysis",
+                    "analyze",
+                    "visualize",
+                    "plot",
+                    "chart",
+                    "statistics",
+                    "summary",
+                    "explore",
+                    "inspect",
+                    "pyodide",
+                    "browser",
+                    "legacy analysis",
+                ],
                 1.0,
             ),
             "tool_recommendation": (
@@ -346,7 +385,7 @@ For specific tools, please also cite the individual tool publications.""",
             reasoning = reasoning_match.group(1).strip() if reasoning_match else "DeepSeek routing"
 
             # Validate agent exists
-            valid_agents = ["error_analysis", "custom_tool", "tool_recommendation", "gtn_training"]
+            valid_agents = ["error_analysis", "custom_tool", "tool_recommendation", "gtn_training", "data_analysis"]
             if agent not in valid_agents:
                 agent = "tool_recommendation"  # Default fallback
                 reasoning = f"Fallback to tool_recommendation. Original: {reasoning}"

@@ -7,19 +7,38 @@ export const useUnprivilegedToolStore = defineStore("unprivilegedToolStore", () 
     const unprivilegedTools = ref<UnprivilegedToolResponse[]>();
     const canUseUnprivilegedTools = ref(false);
     const isLoading = ref(false);
+    const loadError = ref<string | null>(null);
+    const requiresAuthentication = ref(false);
     const isLoaded = computed(() => unprivilegedTools.value !== undefined);
 
     async function load(reload = false) {
         if (reload || (!isLoaded.value && !isLoading.value)) {
             isLoading.value = true;
-            const { data, error } = await GalaxyApi().GET("/api/unprivileged_tools");
+            loadError.value = null;
+            requiresAuthentication.value = false;
+            try {
+                const { data, error, response } = await GalaxyApi().GET("/api/unprivileged_tools");
 
-            if (error) {
+                if (error) {
+                    const status = response?.status ?? (error as any)?.status ?? (error as any)?.status_code;
+                    if (status === 401 || status === 403) {
+                        requiresAuthentication.value = true;
+                        loadError.value = "Authentication required to manage custom tools.";
+                    } else {
+                        loadError.value = (error as any)?.error ?? "Failed to load custom tools.";
+                    }
+                    canUseUnprivilegedTools.value = false;
+                    unprivilegedTools.value = undefined;
+                } else {
+                    unprivilegedTools.value = Array.isArray(data) ? data : [];
+                    canUseUnprivilegedTools.value = true;
+                }
+            } catch (err) {
+                console.error("Error loading unprivileged tools", err);
+                loadError.value = "Failed to load custom tools.";
                 canUseUnprivilegedTools.value = false;
-            } else {
-                unprivilegedTools.value = data;
-                canUseUnprivilegedTools.value = true;
-
+                unprivilegedTools.value = undefined;
+            } finally {
                 isLoading.value = false;
             }
         }
@@ -46,6 +65,9 @@ export const useUnprivilegedToolStore = defineStore("unprivilegedToolStore", () 
         canUseUnprivilegedTools,
         unprivilegedTools,
         isLoaded,
+        isLoading,
+        loadError,
+        requiresAuthentication,
         load,
         deactivateTool,
     };

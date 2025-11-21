@@ -71,6 +71,7 @@ class WorkflowOrchestratorAgent(BaseGalaxyAgent):
         - tool_recommendation: Find appropriate tools for tasks
         - gtn_training: Provide tutorials and learning materials
         - custom_tool: Create new Galaxy tools
+        - data_analysis: Exploratory data analysis agent (DSPy variant temporarily unavailable)
 
         EXAMPLES:
         Query: "My RNA-seq tool failed, help me fix it and find alternatives"
@@ -253,7 +254,7 @@ class WorkflowOrchestratorAgent(BaseGalaxyAgent):
         return """
         You coordinate multiple Galaxy agents. Determine which agents to call and in what order.
 
-        Available agents: error_analysis, tool_recommendation, gtn_training, custom_tool
+        Available agents: error_analysis, tool_recommendation, gtn_training, custom_tool, data_analysis
 
         Respond in this format:
         AGENTS: [agent1, agent2]

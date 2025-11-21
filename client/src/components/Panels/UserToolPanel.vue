@@ -31,11 +31,34 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits(["unprivileged-tool-clicked", "onInsertTool", "onEditTool", "onCreateTool"]);
 
 const unprivilegedToolStore = useUnprivilegedToolStore();
-const { unprivilegedTools, canUseUnprivilegedTools } = storeToRefs(unprivilegedToolStore);
+const { unprivilegedTools, canUseUnprivilegedTools, loadError, requiresAuthentication, isLoading } = storeToRefs(unprivilegedToolStore);
 
 async function loadUnprivilegedTools(offset: number, limit: number) {
     return { items: unprivilegedTools.value || [], total: unprivilegedTools.value?.length || 0 };
 }
+
+const fallbackMessage = computed(() => {
+    if (isLoading.value) {
+        return "Loading custom tools...";
+    }
+    if (requiresAuthentication.value) {
+        return "Sign in to create and manage custom tools.";
+    }
+    if (loadError.value) {
+        return loadError.value;
+    }
+    return "Custom tools are currently unavailable.";
+});
+
+const fallbackMessageClass = computed(() => {
+    if (requiresAuthentication.value) {
+        return "text-muted";
+    }
+    if (loadError.value) {
+        return "text-danger";
+    }
+    return "text-muted";
+});
 const uuidRegex = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/;
 
 const route = useRoute();
@@ -157,6 +180,9 @@ function getToolSecondaryActions(tool: UnprivilegedToolResponse) {
                 </GCard>
             </template>
         </ScrollList>
+    </ActivityPanel>
+    <ActivityPanel v-else title="Custom Tools">
+        <p class="m-3" :class="fallbackMessageClass">{{ fallbackMessage }}</p>
     </ActivityPanel>
 </template>
 

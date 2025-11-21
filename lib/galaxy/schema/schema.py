@@ -9,6 +9,7 @@ from enum import Enum
 from typing import (
     Annotated,
     Any,
+    List,
     Optional,
     Union,
 )
@@ -3888,6 +3889,11 @@ class ChatPayload(Model):
         default=None,
         title="Exchange ID",
         description="The ID of an existing chat exchange to continue.",
+    )
+    dataset_ids: Optional[List[str]] = Field(
+        default=None,
+        title="Dataset Identifiers",
+        description="Optional list of encoded dataset IDs selected by the user.",
     )
 
 
