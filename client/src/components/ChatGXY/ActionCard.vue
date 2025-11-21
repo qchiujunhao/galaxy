@@ -2,12 +2,11 @@
     <div v-if="suggestions.length > 0" class="action-card">
         <div class="action-header">Quick Actions</div>
         <div class="action-list">
-            <GButton
-                v-for="action in sortedSuggestions"
-                :key="`${action.action_type}-${action.description}`"
-                outline
-                size="small"
-                :color="action.priority === 1 ? 'blue' : 'grey'"
+            <button
+                v-for="(action, index) in sortedSuggestions"
+                :key="`${action.action_type}-${index}-${action.description}`"
+                class="btn action-button"
+                :class="getButtonClass(action.priority)"
                 :disabled="processingAction"
                 @click="$emit('handle-action', action)">
                 <FontAwesomeIcon :icon="getIcon(action.action_type)" fixed-width />
@@ -49,7 +48,9 @@ defineEmits<{
 }>();
 
 const sortedSuggestions = computed(() => {
-    return [...props.suggestions].sort((a, b) => a.priority - b.priority);
+    return [...props.suggestions]
+        .filter((suggestion) => suggestion.action_type !== ActionType.PYODIDE_EXECUTE)
+        .sort((a, b) => a.priority - b.priority);
 });
 
 const iconMap: Record<ActionType, IconDefinition> = {
