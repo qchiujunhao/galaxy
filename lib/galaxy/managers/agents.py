@@ -46,6 +46,7 @@ except ImportError:
     GalaxyAgentDependencies = None
     QueryRouterAgent = None
     ErrorAnalysisAgent = None
+    DataAnalysisAgent = None
 
 if TYPE_CHECKING:
     from galaxy.agents.dspy_adapter import DSPyPlanResult  # pragma: no cover
