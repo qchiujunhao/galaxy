@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { library } from "@fortawesome/fontawesome-svg-core";
 import {
     faClock,
     faHistory,
@@ -12,29 +11,32 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/vue-fontawesome";
 import { BSkeleton } from "bootstrap-vue";
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 
 import { GalaxyApi } from "@/api";
-import { getAppRoot } from "@/onload/loadConfig";
 import { type ActionSuggestion, type AgentResponse, useAgentActions } from "@/composables/agentActions";
 import { useMarkdown } from "@/composables/markdown";
-import { usePyodideRunner, type PyodideArtifact, type PyodideRunResult, type PyodideTask } from "@/composables/usePyodideRunner";
 import { useToast } from "@/composables/toast";
+import {
+    type PyodideArtifact,
+    type PyodideRunResult,
+    type PyodideTask,
+    usePyodideRunner,
+} from "@/composables/usePyodideRunner";
+import { getAppRoot } from "@/onload/loadConfig";
+import { useHistoryItemsStore } from "@/stores/historyItemsStore";
+import { useHistoryStore } from "@/stores/historyStore";
 import { errorMessageAsString } from "@/utils/simple-error";
 
 import ActionCard from "./ChatGXY/ActionCard.vue";
 import LoadingSpan from "@/components/LoadingSpan.vue";
-import { useHistoryItemsStore } from "@/stores/historyItemsStore";
-import { useHistoryStore } from "@/stores/historyStore";
-
-library.add(faThumbsUp, faThumbsDown, faPaperPlane, faUser, faMagic, faHistory, faTrash, faClock);
 
 interface AnalysisStep {
-    type: 'thought' | 'action' | 'observation' | 'conclusion';
+    type: "thought" | "action" | "observation" | "conclusion";
     content: string;
     requirements?: string[];
-    status?: 'pending' | 'running' | 'completed' | 'error';
+    status?: "pending" | "running" | "completed" | "error";
     stdout?: string;
     stderr?: string;
     success?: boolean;
@@ -128,7 +130,7 @@ const historyStore = useHistoryStore();
 const { lastUpdateTime } = storeToRefs(historyItemsStore);
 const { currentHistoryId } = storeToRefs(historyStore);
 const isChatBusy = computed(
-    () => busy.value || pyodideRunner.isRunning.value || messages.value.some((message) => isAwaitingExecution(message))
+    () => busy.value || pyodideRunner.isRunning.value || messages.value.some((message) => isAwaitingExecution(message)),
 );
 const renderMessages = computed(() => messages.value);
 
@@ -181,7 +183,7 @@ watch(
         }
         loadDatasetOptions();
     },
-    { immediate: false }
+    { immediate: false },
 );
 
 watch(
@@ -190,7 +192,7 @@ watch(
         selectedDatasets.value = [];
         loadDatasetOptions();
     },
-    { immediate: false }
+    { immediate: false },
 );
 
 function generateId() {
@@ -229,6 +231,8 @@ function attachPendingCollapsedMessages(target: Message) {
     });
     for (let i = pendingCollapsedMessages.length - 1; i >= 0; i -= 1) {
         const msg = pendingCollapsedMessages[i];
+
+        if (msg) {
         if (!target.generatedPlots?.length && msg.generatedPlots?.length) {
             target.generatedPlots = [...msg.generatedPlots];
         }
@@ -237,6 +241,7 @@ function attachPendingCollapsedMessages(target: Message) {
         }
         if ((!target.artifacts || !target.artifacts.length) && msg.artifacts?.length) {
             target.artifacts = [...msg.artifacts];
+            }
         }
     }
     if (target.isCollapsed === undefined) {
@@ -245,16 +250,14 @@ function attachPendingCollapsedMessages(target: Message) {
     pendingCollapsedMessages.length = 0;
 }
 
-
-
 function getLatestUserQuery(): string {
     for (let i = messages.value.length - 1; i >= 0; i -= 1) {
         const entry = messages.value[i];
-        if (entry.role === 'user') {
+        if (entry?.role === "user") {
             return entry.content;
         }
     }
-    return '';
+    return "";
 }
 
 function isLatestAssistantMessage(message: Message): boolean {
@@ -263,13 +266,12 @@ function isLatestAssistantMessage(message: Message): boolean {
     }
     for (let i = messages.value.length - 1; i >= 0; i -= 1) {
         const candidate = messages.value[i];
-        if (candidate.role === "assistant" && !candidate.isSystemMessage) {
+        if (candidate?.role === "assistant" && !candidate.isSystemMessage) {
             return candidate.id === message.id;
         }
     }
     return false;
 }
-
 
 function findMessageForPayload(payload: any): Message | undefined {
     const candidateTaskId =
@@ -374,14 +376,13 @@ function populateAssistantMessage(
     target: Message,
     payload: any,
     fallbackAgentType: string,
-    options?: { skipDatasetUpdate?: boolean }
+    options?: { skipDatasetUpdate?: boolean },
 ) {
     const agentResponse = (payload?.agent_response ?? payload?.response?.agent_response) as AgentResponse | undefined;
     const content =
-        typeof payload === "string"
-            ? payload
-            : payload?.response ?? agentResponse?.content ?? "No response received";
-    const effectiveAgentType = agentResponse?.agent_type || (fallbackAgentType === "auto" ? "router" : fallbackAgentType);
+        typeof payload === "string" ? payload : (payload?.response ?? agentResponse?.content ?? "No response received");
+    const effectiveAgentType =
+        agentResponse?.agent_type || (fallbackAgentType === "auto" ? "router" : fallbackAgentType);
 
     target.content = content;
     target.timestamp = payload?.timestamp ? new Date(payload.timestamp) : new Date();
@@ -547,12 +548,7 @@ function maybeRunPyodideForMessage(message: Message) {
     runPyodideTaskForMessage(message, task, taskKey, metadata);
 }
 
-function runPyodideTaskForMessage(
-    message: Message,
-    task: PyodideTask,
-    taskKey: string,
-    metadata: Record<string, any>
-) {
+function runPyodideTaskForMessage(message: Message, task: PyodideTask, taskKey: string, metadata: Record<string, any>) {
     const state = reactive<ExecutionState>({
         status: "initialising",
         stdout: "",
@@ -633,8 +629,10 @@ function openChatStream(exchangeId: number) {
     const existing = chatStream.value;
     if (existing) {
         const existingId = (existing as any)._exchangeId as number | undefined;
-        if (existingId === exchangeId &&
-            (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) {
+        if (
+            existingId === exchangeId &&
+            (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)
+        ) {
             return;
         }
         existing.close();
@@ -693,7 +691,9 @@ function handleStreamMessage(event: MessageEvent) {
                 deliveredTaskIds.add(taskId);
                 const existing = pyodideTaskToMessage.get(String(taskId));
                 if (existing) {
-                    populateAssistantMessage(existing, payload.payload, selectedAgentType.value, { skipDatasetUpdate: true });
+                    populateAssistantMessage(existing, payload.payload, selectedAgentType.value, {
+                        skipDatasetUpdate: true,
+                    });
                     maybeRunPyodideForMessage(existing);
                     return;
                 }
@@ -705,7 +705,6 @@ function handleStreamMessage(event: MessageEvent) {
         console.error("Failed to process chat stream message", error);
     }
 }
-
 
 async function uploadArtifacts(artifacts: PyodideArtifact[]): Promise<UploadedArtifact[]> {
     if (!currentChatId.value) {
@@ -770,7 +769,6 @@ function resolveDownloadUrl(url: string): string {
     return `${getAppRoot()}${url}`;
 }
 
-
 function mapStatus(status: string): ExecutionState["status"] {
     switch (status) {
         case "initialising":
@@ -792,7 +790,7 @@ async function submitPyodideExecutionResult(
     task: PyodideTask,
     message: Message,
     result: PyodideRunResult,
-    artifacts: UploadedArtifact[]
+    artifacts: UploadedArtifact[],
 ) {
     if (!currentChatId.value) {
         throw new Error("No active chat to submit execution results.");
@@ -813,6 +811,7 @@ async function submitPyodideExecutionResult(
         },
     };
 
+    // @ts-ignore TODO: We will add the pydantic model later
     const { data, error } = await GalaxyApi().POST(`/api/chat/exchange/${currentChatId.value}/pyodide_result`, {
         body: payload,
     });
@@ -881,9 +880,6 @@ onBeforeUnmount(() => {
     closeChatStream();
 });
 
-
-
-
 function downloadArtifact(artifact: UploadedArtifact) {
     if (artifact.download_url) {
         window.open(artifact.download_url, "_blank");
@@ -920,9 +916,7 @@ function normalisePathList(raw: unknown): string[] {
         if (!text) {
             continue;
         }
-        const normalised = text.startsWith("generated_file")
-            ? text
-            : `generated_file/${text.replace(/^\/+/, "")}`;
+        const normalised = text.startsWith("generated_file") ? text : `generated_file/${text.replace(/^\/+/, "")}`;
         if (!seen.has(normalised)) {
             seen.add(normalised);
             results.push(normalised);
@@ -941,8 +935,7 @@ function normaliseArtifactList(raw: unknown): UploadedArtifact[] {
             continue;
         }
         const record = entry as Record<string, any>;
-        const identifier =
-            record.dataset_id || record.name || record.path || record.id || generateId();
+        const identifier = record.dataset_id || record.name || record.path || record.id || generateId();
         const downloadUrl = record.download_url ? resolveDownloadUrl(String(record.download_url)) : undefined;
         artifacts.push({
             dataset_id: String(identifier),
@@ -956,45 +949,47 @@ function normaliseArtifactList(raw: unknown): UploadedArtifact[] {
     return artifacts;
 }
 
-function normaliseGeneratedEntry(entry: string): string {
-    return entry.replace(/^generated_file\//, "").replace(/^\/+/, "");
-}
+// Commented out unused functions for now
 
-function findArtifactForEntry(entry: string, artifacts?: UploadedArtifact[]): UploadedArtifact | undefined {
-    if (!artifacts || artifacts.length === 0) {
-        return undefined;
-    }
-    const normalized = normaliseGeneratedEntry(entry);
-    return artifacts.find((artifact) => {
-        const artifactName = normaliseGeneratedEntry(artifact.name || "");
-        return (
-            artifactName === normalized ||
-            artifactName === entry ||
-            artifact.dataset_id === normalized ||
-            artifact.dataset_id === entry
-        );
-    });
-}
+// function normaliseGeneratedEntry(entry: string): string {
+//     return entry.replace(/^generated_file\//, "").replace(/^\/+/, "");
+// }
 
-function artifactPreviewUrl(entry: string, artifacts?: UploadedArtifact[]): string | undefined {
-    const match = findArtifactForEntry(entry, artifacts);
-    return match?.download_url || undefined;
-}
+// function findArtifactForEntry(entry: string, artifacts?: UploadedArtifact[]): UploadedArtifact | undefined {
+//     if (!artifacts || artifacts.length === 0) {
+//         return undefined;
+//     }
+//     const normalized = normaliseGeneratedEntry(entry);
+//     return artifacts.find((artifact) => {
+//         const artifactName = normaliseGeneratedEntry(artifact.name || "");
+//         return (
+//             artifactName === normalized ||
+//             artifactName === entry ||
+//             artifact.dataset_id === normalized ||
+//             artifact.dataset_id === entry
+//         );
+//     });
+// }
 
-function artifactDownloadHandler(entry: string, artifacts?: UploadedArtifact[]) {
-    const match = findArtifactForEntry(entry, artifacts);
-    if (match) {
-        downloadArtifact(match);
-    }
-}
+// function artifactPreviewUrl(entry: string, artifacts?: UploadedArtifact[]): string | undefined {
+//     const match = findArtifactForEntry(entry, artifacts);
+//     return match?.download_url || undefined;
+// }
+
+// function artifactDownloadHandler(entry: string, artifacts?: UploadedArtifact[]) {
+//     const match = findArtifactForEntry(entry, artifacts);
+//     if (match) {
+//         downloadArtifact(match);
+//     }
+// }
 
 function formatGeneratedEntry(entry: string): string {
     return entry.replace(/^generated_file\//, "");
 }
 
-function artifactIsDownloadable(entry: string, artifacts?: UploadedArtifact[]): boolean {
-    return Boolean(findArtifactForEntry(entry, artifacts));
-}
+// function artifactIsDownloadable(entry: string, artifacts?: UploadedArtifact[]): boolean {
+//     return Boolean(findArtifactForEntry(entry, artifacts));
+// }
 
 function updateMessageOutputsFromArtifacts(message: Message, artifacts: UploadedArtifact[] | undefined) {
     if (!artifacts || artifacts.length === 0) {
@@ -1066,7 +1061,6 @@ function applyExecutionResultMetadata(message: Message, execResult: any) {
     applyCollapseState(message);
 }
 
-
 function normaliseAnalysisSteps(raw: unknown): AnalysisStep[] {
     if (!Array.isArray(raw)) {
         return [];
@@ -1074,31 +1068,31 @@ function normaliseAnalysisSteps(raw: unknown): AnalysisStep[] {
 
     return raw
         .map((step) => {
-            if (!step || typeof step !== 'object') {
+            if (!step || typeof step !== "object") {
                 return null;
             }
             const record = step as Record<string, unknown>;
             const type = record.type;
-            if (type !== 'thought' && type !== 'action' && type !== 'observation' && type !== 'conclusion') {
+            if (type !== "thought" && type !== "action" && type !== "observation" && type !== "conclusion") {
                 return null;
             }
-            const content = String(record.content ?? '');
+            const content = String(record.content ?? "");
             const requirements = Array.isArray(record.requirements)
                 ? (record.requirements as unknown[]).map(String)
                 : undefined;
             const statusValue = record.status;
-            const status: AnalysisStep['status'] | undefined =
-                statusValue === 'running' || statusValue === 'completed' || statusValue === 'error'
+            const status: AnalysisStep["status"] | undefined =
+                statusValue === "running" || statusValue === "completed" || statusValue === "error"
                     ? statusValue
                     : undefined;
-            const stdout = typeof record.stdout === 'string' ? record.stdout : undefined;
-            const stderr = typeof record.stderr === 'string' ? record.stderr : undefined;
-            const success = typeof record.success === 'boolean' ? record.success : undefined;
+            const stdout = typeof record.stdout === "string" ? record.stdout : undefined;
+            const stderr = typeof record.stderr === "string" ? record.stderr : undefined;
+            const success = typeof record.success === "boolean" ? record.success : undefined;
             return {
                 type,
                 content,
                 requirements,
-                status: type === 'action' ? status ?? 'pending' : undefined,
+                status: type === "action" ? (status ?? "pending") : undefined,
                 stdout,
                 stderr,
                 success,
@@ -1271,7 +1265,7 @@ function scrollToBottom() {
         // Use smooth scrolling and avoid focus disruption
         chatContainer.value.scrollTo({
             top: chatContainer.value.scrollHeight,
-            behavior: 'auto' // Use 'smooth' if you want animated scrolling
+            behavior: "auto", // Use 'smooth' if you want animated scrolling
         });
     }
 }
@@ -1286,6 +1280,8 @@ async function sendFeedback(messageId: string, value: "up" | "down") {
         if (currentChatId.value) {
             try {
                 const feedbackValue = value === "up" ? 1 : 0;
+
+                // @ts-ignore TODO: Add pydantic model later
                 const { error } = await GalaxyApi().PUT("/api/chat/exchange/{exchange_id}/feedback", {
                     params: {
                         path: { exchange_id: currentChatId.value },
@@ -1335,13 +1331,13 @@ function getAgentLabel(agentType?: string) {
 
 function getAgentDescription(agentType?: string) {
     const descriptions = {
-        "router": "Intelligent query routing and task classification",
-        "error_analysis": "Debugging tool errors and job failures",
-        "tool_recommendation": "Finding the right Galaxy tools for your analysis",
-        "dspy_tool_recommendation": "Advanced reasoning for tool selection using DSPy",
-        "custom_tool": "Creating custom Galaxy tools and wrappers", 
-        "data_analysis": "Exploratory analysis and code-driven insights",
-        "gtn_training": "Finding tutorials and training materials"
+        router: "Intelligent query routing and task classification",
+        error_analysis: "Debugging tool errors and job failures",
+        tool_recommendation: "Finding the right Galaxy tools for your analysis",
+        dspy_tool_recommendation: "Advanced reasoning for tool selection using DSPy",
+        custom_tool: "Creating custom Galaxy tools and wrappers",
+        data_analysis: "Exploratory analysis and code-driven insights",
+        gtn_training: "Finding tutorials and training materials",
     };
     return descriptions[agentType as keyof typeof descriptions] || "General AI assistance";
 }
@@ -1402,13 +1398,17 @@ async function loadPreviousChat(item: ChatHistoryItem) {
     pendingCollapsedMessages.length = 0;
     // Try to load the full conversation from the backend
     try {
-        const { data: fullConversation } = await GalaxyApi().GET(`/api/chat/exchange/{exchange_id}/messages`, {
+        // @ts-ignore TODO: Add pydantic model later
+        const { data } = await GalaxyApi().GET(`/api/chat/exchange/{exchange_id}/messages`, {
             params: {
                 path: {
                     exchange_id: item.id,
                 },
             },
         });
+
+        // TODO: Define proper type for response, then we wouldn't need to define `fullConversation` here separately
+        const fullConversation = data as any[] | undefined;
 
         if (fullConversation && fullConversation.length > 0) {
             // Clear and rebuild messages from full conversation
@@ -1421,7 +1421,7 @@ async function loadPreviousChat(item: ChatHistoryItem) {
             const assistantMessagesToReplay: Message[] = [];
             for (let index = 0; index < fullConversation.length; index += 1) {
                 const msg = fullConversation[index];
-                if (msg.role === "execution_result") {
+                if (msg?.role === "execution_result") {
                     if (msg.task_id) {
                         deliveredTaskIds.add(String(msg.task_id));
                         const target = taskIdToMessage[String(msg.task_id)];
@@ -1455,7 +1455,8 @@ async function loadPreviousChat(item: ChatHistoryItem) {
                             message.analysisSteps = steps;
                         }
                         if (metadata) {
-                            const artifactSource = (metadata as any)?.artifacts ?? (metadata as any)?.execution?.artifacts;
+                            const artifactSource =
+                                (metadata as any)?.artifacts ?? (metadata as any)?.execution?.artifacts;
                             const storedArtifacts = normaliseArtifactList(artifactSource);
                             updateMessageOutputsFromArtifacts(message, storedArtifacts);
                         const plots = normalisePathList((metadata as any)?.plots);
@@ -1583,7 +1584,6 @@ function loadSingleMessageFallback(item: ChatHistoryItem) {
     if (Array.isArray(metadataDatasets) && metadataDatasets.length > 0) {
         selectedDatasets.value = metadataDatasets.map(String);
     }
-
 }
 
 async function loadLatestChat() {
@@ -1704,7 +1704,9 @@ function formatTime(timestamp: string) {
                     <LoadingSpan message="Loading history..." />
                 </div>
 
-                <div v-else-if="chatHistory.length === 0" class="text-muted p-3 text-center">No chat history yet</div>
+                    <div v-else-if="chatHistory.length === 0" class="text-muted p-3 text-center">
+                        No chat history yet
+                    </div>
 
                 <div v-else class="history-list">
                     <div
@@ -1785,7 +1787,10 @@ function formatTime(timestamp: string) {
                                 :title="`Confidence: ${message.confidence}`">
                                 {{ message.confidence }}
                             </span>
-                            <span v-if="message.routingInfo" class="routing-info" :title="message.routingInfo.reasoning">
+                                <span
+                                    v-if="message.routingInfo"
+                                    class="routing-info"
+                                    :title="message.routingInfo.reasoning">
                                 → {{ getAgentLabel(message.routingInfo.selected_agent) }}
                             </span>
                         </div>
@@ -1793,16 +1798,17 @@ function formatTime(timestamp: string) {
 
                     <div
                         v-if="message.role === 'assistant' && isAwaitingExecution(message)"
-                        class="alert alert-warning pyodide-hint mb-2"
-                    >
+                            class="alert alert-warning pyodide-hint mb-2">
                         ⚙️ Analysis still running… please keep this tab open; refreshing will restart the execution.
                     </div>
                     <div
-                        v-else-if="message.role === 'assistant' && message.agentResponse?.metadata?.pyodide_status === 'timeout'"
-                        class="alert alert-warning pyodide-hint mb-2"
-                    >
-                        ⚠️ Previous run timed out before the result was sent. Please ask again if you still need this step to
-                        complete.
+                            v-else-if="
+                                message.role === 'assistant' &&
+                                message.agentResponse?.metadata?.pyodide_status === 'timeout'
+                            "
+                            class="alert alert-warning pyodide-hint mb-2">
+                            ⚠️ Previous run timed out before the result was sent. Please ask again if you still need
+                            this step to complete.
                     </div>
 
 <div class="message-content">
@@ -1814,52 +1820,60 @@ function formatTime(timestamp: string) {
     <template v-else-if="message.role === 'assistant'">
         <!-- eslint-disable-next-line vue/no-v-html -->
         <div v-html="renderMarkdown(message.content)" />
-    <div
-        v-if="shouldShowArtifacts(message)"
-        class="mt-2"
-    >
+                                <div v-if="shouldShowArtifacts(message)" class="mt-2">
         <details open class="artifacts-panel">
-            <summary class="text-muted">Saved Artifacts ({{ message.artifacts.length }})</summary>
+                                        <summary class="text-muted">
+                                            <!-- TODO: Handle case where message.artifacts is undefined? -->
+                                            Saved Artifacts ({{ message.artifacts?.length }})
+                                        </summary>
             <div class="artifact-grid">
                 <div
                     v-for="artifact in message.artifacts"
                     :key="artifact.dataset_id || artifact.name"
-                    class="artifact-grid-item"
-                >
+                                                class="artifact-grid-item">
                     <div class="artifact-name">
                         <button
                             v-if="artifact.download_url"
                             class="btn btn-link btn-sm p-0"
                             type="button"
-                            @click="downloadArtifact(artifact)"
-                        >
+                                                        @click="downloadArtifact(artifact)">
                             {{ artifact.name || artifact.dataset_id }}
                         </button>
                         <span v-else>{{ artifact.name || artifact.dataset_id }}</span>
-                        <span v-if="artifact.size" class="text-muted ml-1">({{ formatSize(artifact.size) }})</span>
+                                                    <span v-if="artifact.size" class="text-muted ml-1"
+                                                        >({{ formatSize(artifact.size) }})</span
+                                                    >
                     </div>
                     <div
-                        v-if="artifact.mime_type && artifact.mime_type.startsWith('image/') && artifact.download_url"
-                        class="artifact-preview mt-2"
-                    >
+                                                    v-if="
+                                                        artifact.mime_type &&
+                                                        artifact.mime_type.startsWith('image/') &&
+                                                        artifact.download_url
+                                                    "
+                                                    class="artifact-preview mt-2">
                         <img
                             :src="artifact.download_url"
                             :alt="artifact.name || 'plot preview'"
-                            class="plot-preview img-thumbnail"
-                        />
+                                                        class="plot-preview img-thumbnail" />
                     </div>
                 </div>
             </div>
         </details>
     </div>
     <template v-if="isDataAnalysisMessage(message)">
-        <details v-if="hasIntermediateDetails(message)" class="intermediate-panel card mt-2">
+                                    <details
+                                        v-if="hasIntermediateDetails(message)"
+                                        class="intermediate-panel card mt-2">
             <summary class="text-muted">Intermediate steps</summary>
             <div class="card-body">
-                <div v-if="message.agentResponse?.metadata?.executed_task?.code" class="executed-code">
+                                            <div
+                                                v-if="message.agentResponse?.metadata?.executed_task?.code"
+                                                class="executed-code">
                     <details>
                         <summary class="text-muted">Executed Python Code</summary>
-                        <pre>{{ message.agentResponse?.metadata?.executed_task?.code }}</pre>
+                                                    <pre>{{
+                                                        message.agentResponse?.metadata?.executed_task?.code
+                                                    }}</pre>
                     </details>
                     <div v-if="message.agentResponse?.metadata?.stdout" class="mt-2">
                         <details>
@@ -1870,37 +1884,53 @@ function formatTime(timestamp: string) {
                     <div v-if="message.agentResponse?.metadata?.stderr" class="mt-2">
                         <details>
                             <summary class="text-muted">Execution Stderr</summary>
-                            <pre class="text-danger">{{ message.agentResponse?.metadata?.stderr }}</pre>
+                                                        <pre class="text-danger">{{
+                                                            message.agentResponse?.metadata?.stderr
+                                                        }}</pre>
                         </details>
                     </div>
                 </div>
-                <div v-if="shouldShowAnalysisSteps(message)" class="analysis-steps card mt-2">
+                                            <div
+                                                v-if="shouldShowAnalysisSteps(message)"
+                                                class="analysis-steps card mt-2">
                     <div
                         v-for="(step, idx) in message.analysisSteps"
                         :key="idx"
                         class="analysis-step"
-                        :class="[step.type, step.status && step.status !== 'pending' ? step.status : '']">
+                                                    :class="[
+                                                        step.type,
+                                                        step.status && step.status !== 'pending' ? step.status : '',
+                                                    ]">
                         <div class="analysis-step-header">
                             <span class="step-label">
-                                {{ step.type === 'thought'
-                                    ? 'Plan'
-                                    : step.type === 'action'
-                                        ? 'Action'
-                                        : step.type === 'observation'
-                                            ? 'Observation'
-                                            : 'Conclusion' }}
+                                                            {{
+                                                                step.type === "thought"
+                                                                    ? "Plan"
+                                                                    : step.type === "action"
+                                                                      ? "Action"
+                                                                      : step.type === "observation"
+                                                                        ? "Observation"
+                                                                        : "Conclusion"
+                                                            }}
                             </span>
                             <span
-                                v-if="step.type === 'action' && step.status && step.status !== 'pending'"
+                                                            v-if="
+                                                                step.type === 'action' &&
+                                                                step.status &&
+                                                                step.status !== 'pending'
+                                                            "
                                 class="step-status"
                                 :class="step.status">
                                 {{ step.status }}
                             </span>
                             <span
-                                v-else-if="step.type === 'observation' && step.success !== undefined"
+                                                            v-else-if="
+                                                                step.type === 'observation' &&
+                                                                step.success !== undefined
+                                                            "
                                 class="step-status"
                                 :class="step.success ? 'completed' : 'error'">
-                                {{ step.success ? 'success' : 'error' }}
+                                                            {{ step.success ? "success" : "error" }}
                             </span>
                         </div>
                         <div class="analysis-step-body">
@@ -1914,44 +1944,102 @@ function formatTime(timestamp: string) {
                                     <small class="text-muted">stderr</small>
                                     <pre class="text-danger">{{ step.stderr }}</pre>
                                 </div>
-                                <div v-if="!step.stdout && !step.stderr">No textual output.</div>
+                                                            <div v-if="!step.stdout && !step.stderr">
+                                                                No textual output.
+                                                            </div>
                             </div>
                             <div v-else>{{ step.content }}</div>
-                            <div v-if="step.type === 'action' && step.requirements?.length" class="step-requirements">
-                                <small class="text-muted">requirements: {{ step.requirements.join(', ') }}</small>
+                                                        <div
+                                                            v-if="step.type === 'action' && step.requirements?.length"
+                                                            class="step-requirements">
+                                                            <small class="text-muted"
+                                                                >requirements: {{ step.requirements.join(", ") }}</small
+                                                            >
                             </div>
                         </div>
                     </div>
                 </div>
-                <div v-if="message.role === 'assistant' && shouldShowPyodideStatus(message)" class="pyodide-status card mt-2">
+                                            <div
+                                                v-if="message.role === 'assistant' && shouldShowPyodideStatus(message)"
+                                                class="pyodide-status card mt-2">
                     <div class="card-body">
-                        <div v-if="pyodideStateForMessage(message)?.status === 'initialising'" class="text-muted">Preparing browser environment…</div>
-                        <div v-else-if="pyodideStateForMessage(message)?.status === 'installing'" class="text-muted">Installing Python packages…</div>
-                        <div v-else-if="pyodideStateForMessage(message)?.status === 'fetching'" class="text-muted">Downloading datasets…</div>
-                        <div v-else-if="pyodideStateForMessage(message)?.status === 'running'" class="text-muted">Running generated Python in the browser…</div>
-                        <div v-else-if="pyodideStateForMessage(message)?.status === 'submitting'" class="text-muted">Sending results back to Galaxy…</div>
-                        <div v-else-if="pyodideStateForMessage(message)?.status === 'completed'" class="text-success">Execution completed in your browser.</div>
-                        <div v-else-if="pyodideStateForMessage(message)?.status === 'error'" class="text-danger">
-                            Execution failed{{ pyodideStateForMessage(message)?.errorMessage ? ': ' + pyodideStateForMessage(message)?.errorMessage : '' }}
+                                                    <div
+                                                        v-if="
+                                                            pyodideStateForMessage(message)?.status === 'initialising'
+                                                        "
+                                                        class="text-muted">
+                                                        Preparing browser environment…
+                                                    </div>
+                                                    <div
+                                                        v-else-if="
+                                                            pyodideStateForMessage(message)?.status === 'installing'
+                                                        "
+                                                        class="text-muted">
+                                                        Installing Python packages…
+                                                    </div>
+                                                    <div
+                                                        v-else-if="
+                                                            pyodideStateForMessage(message)?.status === 'fetching'
+                                                        "
+                                                        class="text-muted">
+                                                        Downloading datasets…
+                                                    </div>
+                                                    <div
+                                                        v-else-if="
+                                                            pyodideStateForMessage(message)?.status === 'running'
+                                                        "
+                                                        class="text-muted">
+                                                        Running generated Python in the browser…
+                                                    </div>
+                                                    <div
+                                                        v-else-if="
+                                                            pyodideStateForMessage(message)?.status === 'submitting'
+                                                        "
+                                                        class="text-muted">
+                                                        Sending results back to Galaxy…
+                                                    </div>
+                                                    <div
+                                                        v-else-if="
+                                                            pyodideStateForMessage(message)?.status === 'completed'
+                                                        "
+                                                        class="text-success">
+                                                        Execution completed in your browser.
+                                                    </div>
+                                                    <div
+                                                        v-else-if="pyodideStateForMessage(message)?.status === 'error'"
+                                                        class="text-danger">
+                                                        Execution failed{{
+                                                            pyodideStateForMessage(message)?.errorMessage
+                                                                ? ": " + pyodideStateForMessage(message)?.errorMessage
+                                                                : ""
+                                                        }}
                         </div>
 
                         <div v-if="pyodideStateForMessage(message)?.stdout" class="mt-2">
                             <h6 class="mb-1">Stdout</h6>
-                            <pre class="pyodide-stream">{{ pyodideStateForMessage(message)?.stdout }}</pre>
+                                                        <pre class="pyodide-stream">{{
+                                                            pyodideStateForMessage(message)?.stdout
+                                                        }}</pre>
                         </div>
                         <div v-if="pyodideStateForMessage(message)?.stderr" class="mt-2">
                             <h6 class="mb-1 text-danger">Stderr</h6>
-                            <pre class="pyodide-stream text-danger">{{ pyodideStateForMessage(message)?.stderr }}</pre>
+                                                        <pre class="pyodide-stream text-danger">{{
+                                                            pyodideStateForMessage(message)?.stderr
+                                                        }}</pre>
                         </div>
-                        <div v-if="pyodideStateForMessage(message)?.artifacts.length" class="mt-2">
+                                                    <div
+                                                        v-if="pyodideStateForMessage(message)?.artifacts.length"
+                                                        class="mt-2">
                             <h6 class="mb-1">Artifacts</h6>
                             <div class="artifact-grid">
                                 <div
-                                    v-for="artifact in pyodideStateForMessage(message)?.artifacts"
+                                                                v-for="artifact in pyodideStateForMessage(message)
+                                                                    ?.artifacts"
                                     :key="artifact.dataset_id || artifact.name"
-                                    class="artifact-grid-item"
-                                >
-                                    <div class="artifact-name">{{ artifact.name || artifact.dataset_id }}</div>
+                                                                class="artifact-grid-item">
+                                                                <div class="artifact-name">
+                                                                    {{ artifact.name || artifact.dataset_id }}
+                                                                </div>
                                 </div>
                             </div>
                         </div>
@@ -1959,112 +2047,159 @@ function formatTime(timestamp: string) {
                 </div>
                 <div
                     v-if="message.collapsedHistory && message.collapsedHistory.length"
-                    class="intermediate-history mt-3"
-                >
-                    <h6 class="mb-2">Earlier steps ({{ message.collapsedHistory.length }})</h6>
+                                                class="intermediate-history mt-3">
+                                                <h6 class="mb-2">
+                                                    Earlier steps ({{ message.collapsedHistory.length }})
+                                                </h6>
                     <div
                         v-for="historyMessage in message.collapsedHistory"
                         :key="historyMessage.id"
-                        class="previous-step mb-3"
-                    >
-                        <div class="text-muted mb-2">{{ collapsedSummary(historyMessage) }}</div>
+                                                    class="previous-step mb-3">
+                                                    <div class="text-muted mb-2">
+                                                        {{ collapsedSummary(historyMessage) }}
+                                                    </div>
                         <div class="message-content">
                             <div v-html="renderMarkdown(historyMessage.content)" />
                             <div v-if="shouldShowArtifacts(historyMessage)" class="mt-2">
                                 <details open class="artifacts-panel">
                                     <summary class="text-muted">
-                                        Saved Artifacts ({{ historyMessage.artifacts.length }})
+                                                                    <!-- TODO: Handle case where historyMessage.artifacts is undefined? -->
+                                                                    Saved Artifacts ({{
+                                                                        historyMessage.artifacts?.length
+                                                                    }})
                                     </summary>
                                     <div class="artifact-grid">
                                         <div
                                             v-for="artifact in historyMessage.artifacts"
                                             :key="artifact.dataset_id || artifact.name"
-                                            class="artifact-grid-item"
-                                        >
+                                                                        class="artifact-grid-item">
                                             <div class="artifact-name">
                                                 <button
                                                     v-if="artifact.download_url"
                                                     class="btn btn-link btn-sm p-0"
                                                     type="button"
-                                                    @click="downloadArtifact(artifact)"
-                                                >
-                                                    {{ artifact.name || artifact.dataset_id }}
+                                                                                @click="downloadArtifact(artifact)">
+                                                                                {{
+                                                                                    artifact.name || artifact.dataset_id
+                                                                                }}
                                                 </button>
-                                                <span v-else>{{ artifact.name || artifact.dataset_id }}</span>
-                                                <span v-if="artifact.size" class="text-muted ml-1">
+                                                                            <span v-else>{{
+                                                                                artifact.name || artifact.dataset_id
+                                                                            }}</span>
+                                                                            <span
+                                                                                v-if="artifact.size"
+                                                                                class="text-muted ml-1">
                                                     ({{ formatSize(artifact.size) }})
                                                 </span>
                                             </div>
                                             <div
                                                 v-if="
                                                     artifact.mime_type &&
-                                                    artifact.mime_type.startsWith('image/') &&
+                                                                                artifact.mime_type.startsWith(
+                                                                                    'image/',
+                                                                                ) &&
                                                     artifact.download_url
                                                 "
-                                                class="artifact-preview mt-2"
-                                            >
+                                                                            class="artifact-preview mt-2">
                                                 <img
                                                     :src="artifact.download_url"
                                                     :alt="artifact.name || 'plot preview'"
-                                                    class="plot-preview img-thumbnail"
-                                                />
+                                                                                class="plot-preview img-thumbnail" />
                                             </div>
                                         </div>
                                     </div>
                                 </details>
                             </div>
                             <div
-                                v-if="historyMessage.agentResponse?.metadata?.executed_task?.code"
+                                                            v-if="
+                                                                historyMessage.agentResponse?.metadata?.executed_task
+                                                                    ?.code
+                                                            "
                                 class="mt-2 executed-code">
                                 <details open>
-                                    <summary class="text-muted">Executed Python Code</summary>
-                                    <pre>{{ historyMessage.agentResponse?.metadata?.executed_task?.code }}</pre>
+                                                                <summary class="text-muted">
+                                                                    Executed Python Code
+                                                                </summary>
+                                                                <pre>{{
+                                                                    historyMessage.agentResponse?.metadata
+                                                                        ?.executed_task?.code
+                                                                }}</pre>
                                 </details>
-                                <div v-if="historyMessage.agentResponse?.metadata?.stdout" class="mt-2">
+                                                            <div
+                                                                v-if="historyMessage.agentResponse?.metadata?.stdout"
+                                                                class="mt-2">
                                     <details open>
-                                        <summary class="text-muted">Execution Stdout</summary>
-                                        <pre>{{ historyMessage.agentResponse?.metadata?.stdout }}</pre>
+                                                                    <summary class="text-muted">
+                                                                        Execution Stdout
+                                                                    </summary>
+                                                                    <pre>{{
+                                                                        historyMessage.agentResponse?.metadata?.stdout
+                                                                    }}</pre>
                                     </details>
                                 </div>
-                                <div v-if="historyMessage.agentResponse?.metadata?.stderr" class="mt-2">
+                                                            <div
+                                                                v-if="historyMessage.agentResponse?.metadata?.stderr"
+                                                                class="mt-2">
                                     <details>
-                                        <summary class="text-muted">Execution Stderr</summary>
-                                        <pre class="text-danger">{{ historyMessage.agentResponse?.metadata?.stderr }}</pre>
+                                                                    <summary class="text-muted">
+                                                                        Execution Stderr
+                                                                    </summary>
+                                                                    <pre class="text-danger">{{
+                                                                        historyMessage.agentResponse?.metadata?.stderr
+                                                                    }}</pre>
                                     </details>
                                 </div>
                             </div>
                         </div>
-                        <div v-if="historyMessage.analysisSteps?.length" class="analysis-steps card mt-2">
+                                                    <div
+                                                        v-if="historyMessage.analysisSteps?.length"
+                                                        class="analysis-steps card mt-2">
                             <div
                                 v-for="(step, idx) in historyMessage.analysisSteps"
                                 :key="idx"
                                 class="analysis-step"
-                                :class="[step.type, step.status && step.status !== 'pending' ? step.status : '']">
+                                                            :class="[
+                                                                step.type,
+                                                                step.status && step.status !== 'pending'
+                                                                    ? step.status
+                                                                    : '',
+                                                            ]">
                                 <div class="analysis-step-header">
                                     <span class="step-label">
-                                        {{ step.type === 'thought'
-                                            ? 'Plan'
-                                            : step.type === 'action'
-                                                ? 'Action'
-                                                : step.type === 'observation'
-                                                    ? 'Observation'
-                                                    : 'Conclusion' }}
+                                                                    {{
+                                                                        step.type === "thought"
+                                                                            ? "Plan"
+                                                                            : step.type === "action"
+                                                                              ? "Action"
+                                                                              : step.type === "observation"
+                                                                                ? "Observation"
+                                                                                : "Conclusion"
+                                                                    }}
                                     </span>
                                     <span
-                                        v-if="step.type === 'action' && step.status && step.status !== 'pending'"
+                                                                    v-if="
+                                                                        step.type === 'action' &&
+                                                                        step.status &&
+                                                                        step.status !== 'pending'
+                                                                    "
                                         class="step-status"
                                         :class="step.status">
                                         {{ step.status }}
                                     </span>
                                     <span
-                                        v-else-if="step.type === 'observation' && step.success !== undefined"
+                                                                    v-else-if="
+                                                                        step.type === 'observation' &&
+                                                                        step.success !== undefined
+                                                                    "
                                         class="step-status"
                                         :class="step.success ? 'completed' : 'error'">
-                                        {{ step.success ? 'success' : 'error' }}
+                                                                    {{ step.success ? "success" : "error" }}
                                     </span>
                                 </div>
                                 <div class="analysis-step-body">
-                                    <pre v-if="step.type === 'action'">{{ step.content }}</pre>
+                                                                <pre v-if="step.type === 'action'">{{
+                                                                    step.content
+                                                                }}</pre>
                                     <div v-else-if="step.type === 'observation'">
                                         <div v-if="step.stdout">
                                             <small class="text-muted">stdout</small>
@@ -2074,11 +2209,21 @@ function formatTime(timestamp: string) {
                                             <small class="text-muted">stderr</small>
                                             <pre class="text-danger">{{ step.stderr }}</pre>
                                         </div>
-                                        <div v-if="!step.stdout && !step.stderr">No textual output.</div>
+                                                                    <div v-if="!step.stdout && !step.stderr">
+                                                                        No textual output.
+                                                                    </div>
                                     </div>
                                     <div v-else>{{ step.content }}</div>
-                                    <div v-if="step.type === 'action' && step.requirements?.length" class="step-requirements">
-                                        <small class="text-muted">requirements: {{ step.requirements.join(', ') }}</small>
+                                                                <div
+                                                                    v-if="
+                                                                        step.type === 'action' &&
+                                                                        step.requirements?.length
+                                                                    "
+                                                                    class="step-requirements">
+                                                                    <small class="text-muted"
+                                                                        >requirements:
+                                                                        {{ step.requirements.join(", ") }}</small
+                                                                    >
                                     </div>
                                 </div>
                             </div>
@@ -2089,7 +2234,9 @@ function formatTime(timestamp: string) {
         </details>
     </template>
     <template v-else>
-        <div v-if="message.agentResponse?.metadata?.executed_task?.code" class="mt-2 executed-code">
+                                    <div
+                                        v-if="message.agentResponse?.metadata?.executed_task?.code"
+                                        class="mt-2 executed-code">
             <details open>
                 <summary class="text-muted">Executed Python Code</summary>
                 <pre>{{ message.agentResponse?.metadata?.executed_task?.code }}</pre>
@@ -2103,7 +2250,9 @@ function formatTime(timestamp: string) {
             <div v-if="message.agentResponse?.metadata?.stderr" class="mt-2">
                 <details>
                     <summary class="text-muted">Execution Stderr</summary>
-                    <pre class="text-danger">{{ message.agentResponse?.metadata?.stderr }}</pre>
+                                                <pre class="text-danger">{{
+                                                    message.agentResponse?.metadata?.stderr
+                                                }}</pre>
                 </details>
             </div>
         </div>
@@ -2112,28 +2261,39 @@ function formatTime(timestamp: string) {
                 v-for="(step, idx) in message.analysisSteps"
                 :key="idx"
                 class="analysis-step"
-                :class="[step.type, step.status && step.status !== 'pending' ? step.status : '']">
+                                            :class="[
+                                                step.type,
+                                                step.status && step.status !== 'pending' ? step.status : '',
+                                            ]">
                 <div class="analysis-step-header">
                     <span class="step-label">
-                        {{ step.type === 'thought'
-                            ? 'Plan'
-                            : step.type === 'action'
-                                ? 'Action'
-                                : step.type === 'observation'
-                                    ? 'Observation'
-                                    : 'Conclusion' }}
+                                                    {{
+                                                        step.type === "thought"
+                                                            ? "Plan"
+                                                            : step.type === "action"
+                                                              ? "Action"
+                                                              : step.type === "observation"
+                                                                ? "Observation"
+                                                                : "Conclusion"
+                                                    }}
                     </span>
                     <span
-                        v-if="step.type === 'action' && step.status && step.status !== 'pending'"
+                                                    v-if="
+                                                        step.type === 'action' &&
+                                                        step.status &&
+                                                        step.status !== 'pending'
+                                                    "
                         class="step-status"
                         :class="step.status">
                         {{ step.status }}
                     </span>
                     <span
-                        v-else-if="step.type === 'observation' && step.success !== undefined"
+                                                    v-else-if="
+                                                        step.type === 'observation' && step.success !== undefined
+                                                    "
                         class="step-status"
                         :class="step.success ? 'completed' : 'error'">
-                        {{ step.success ? 'success' : 'error' }}
+                                                    {{ step.success ? "success" : "error" }}
                     </span>
                 </div>
                 <div class="analysis-step-body">
@@ -2150,31 +2310,71 @@ function formatTime(timestamp: string) {
                         <div v-if="!step.stdout && !step.stderr">No textual output.</div>
                     </div>
                     <div v-else>{{ step.content }}</div>
-                    <div v-if="step.type === 'action' && step.requirements?.length" class="step-requirements">
-                        <small class="text-muted">requirements: {{ step.requirements.join(', ') }}</small>
+                                                <div
+                                                    v-if="step.type === 'action' && step.requirements?.length"
+                                                    class="step-requirements">
+                                                    <small class="text-muted"
+                                                        >requirements: {{ step.requirements.join(", ") }}</small
+                                                    >
                     </div>
                 </div>
             </div>
         </div>
-        <div v-if="message.role === 'assistant' && shouldShowPyodideStatus(message)" class="pyodide-status card mt-2">
+                                    <div
+                                        v-if="message.role === 'assistant' && shouldShowPyodideStatus(message)"
+                                        class="pyodide-status card mt-2">
             <div class="card-body">
-                <div v-if="pyodideStateForMessage(message)?.status === 'initialising'" class="text-muted">Preparing browser environment…</div>
-                <div v-else-if="pyodideStateForMessage(message)?.status === 'installing'" class="text-muted">Installing Python packages…</div>
-                <div v-else-if="pyodideStateForMessage(message)?.status === 'fetching'" class="text-muted">Downloading datasets…</div>
-                <div v-else-if="pyodideStateForMessage(message)?.status === 'running'" class="text-muted">Running generated Python in the browser…</div>
-                <div v-else-if="pyodideStateForMessage(message)?.status === 'submitting'" class="text-muted">Sending results back to Galaxy…</div>
-                <div v-else-if="pyodideStateForMessage(message)?.status === 'completed'" class="text-success">Execution completed in your browser.</div>
-                <div v-else-if="pyodideStateForMessage(message)?.status === 'error'" class="text-danger">
-                    Execution failed{{ pyodideStateForMessage(message)?.errorMessage ? ': ' + pyodideStateForMessage(message)?.errorMessage : '' }}
+                                            <div
+                                                v-if="pyodideStateForMessage(message)?.status === 'initialising'"
+                                                class="text-muted">
+                                                Preparing browser environment…
+                                            </div>
+                                            <div
+                                                v-else-if="pyodideStateForMessage(message)?.status === 'installing'"
+                                                class="text-muted">
+                                                Installing Python packages…
+                                            </div>
+                                            <div
+                                                v-else-if="pyodideStateForMessage(message)?.status === 'fetching'"
+                                                class="text-muted">
+                                                Downloading datasets…
+                                            </div>
+                                            <div
+                                                v-else-if="pyodideStateForMessage(message)?.status === 'running'"
+                                                class="text-muted">
+                                                Running generated Python in the browser…
+                                            </div>
+                                            <div
+                                                v-else-if="pyodideStateForMessage(message)?.status === 'submitting'"
+                                                class="text-muted">
+                                                Sending results back to Galaxy…
+                                            </div>
+                                            <div
+                                                v-else-if="pyodideStateForMessage(message)?.status === 'completed'"
+                                                class="text-success">
+                                                Execution completed in your browser.
+                                            </div>
+                                            <div
+                                                v-else-if="pyodideStateForMessage(message)?.status === 'error'"
+                                                class="text-danger">
+                                                Execution failed{{
+                                                    pyodideStateForMessage(message)?.errorMessage
+                                                        ? ": " + pyodideStateForMessage(message)?.errorMessage
+                                                        : ""
+                                                }}
                 </div>
 
                 <div v-if="pyodideStateForMessage(message)?.stdout" class="mt-2">
                     <h6 class="mb-1">Stdout</h6>
-                    <pre class="pyodide-stream">{{ pyodideStateForMessage(message)?.stdout }}</pre>
+                                                <pre class="pyodide-stream">{{
+                                                    pyodideStateForMessage(message)?.stdout
+                                                }}</pre>
                 </div>
                 <div v-if="pyodideStateForMessage(message)?.stderr" class="mt-2">
                     <h6 class="mb-1 text-danger">Stderr</h6>
-                    <pre class="pyodide-stream text-danger">{{ pyodideStateForMessage(message)?.stderr }}</pre>
+                                                <pre class="pyodide-stream text-danger">{{
+                                                    pyodideStateForMessage(message)?.stderr
+                                                }}</pre>
                 </div>
                 <div v-if="pyodideStateForMessage(message)?.artifacts.length" class="mt-2">
                     <h6 class="mb-1">Artifacts</h6>
@@ -2182,9 +2382,10 @@ function formatTime(timestamp: string) {
                         <div
                             v-for="artifact in pyodideStateForMessage(message)?.artifacts"
                             :key="artifact.dataset_id || artifact.name"
-                            class="artifact-grid-item"
-                        >
-                            <div class="artifact-name">{{ artifact.name || artifact.dataset_id }}</div>
+                                                        class="artifact-grid-item">
+                                                        <div class="artifact-name">
+                                                            {{ artifact.name || artifact.dataset_id }}
+                                                        </div>
                         </div>
                     </div>
                 </div>
@@ -2193,17 +2394,18 @@ function formatTime(timestamp: string) {
     </template>
     </template>
     <div v-else>{{ message.content }}</div>
-</div>
 
                     <div
-                        v-if="!isDataAnalysisMessage(message) && message.collapsedHistory && message.collapsedHistory.length"
-                        class="collapsed-history mt-3"
-                    >
+                                v-if="
+                                    !isDataAnalysisMessage(message) &&
+                                    message.collapsedHistory &&
+                                    message.collapsedHistory.length
+                                "
+                                class="collapsed-history mt-3">
                         <details
                             class="intermediate-details"
                             :open="!message.isCollapsed"
-                            @toggle="(event) => handleIntermediateToggle(event, message)"
-                        >
+                                    @toggle="(event) => handleIntermediateToggle(event, message)">
                             <summary>
                                 <span>Intermediate steps ({{ message.collapsedHistory.length }})</span>
                                 <span class="chip-chevron" :class="{ open: !message.isCollapsed }">›</span>
@@ -2212,32 +2414,33 @@ function formatTime(timestamp: string) {
                                 <div
                                     v-for="historyMessage in message.collapsedHistory"
                                     :key="historyMessage.id"
-                                    class="previous-step mb-4"
-                                >
+                                            class="previous-step mb-4">
                                     <div class="text-muted mb-2">{{ collapsedSummary(historyMessage) }}</div>
                                     <div class="message-content">
+                                                <!-- eslint-disable-next-line vue/no-v-html -->
                                         <div v-html="renderMarkdown(historyMessage.content)" />
                                         <div v-if="shouldShowArtifacts(historyMessage)" class="mt-2">
                                             <details open class="artifacts-panel">
                                                 <summary class="text-muted">
-                                                    Saved Artifacts ({{ historyMessage.artifacts.length }})
+                                                            <!-- TODO: Handle case where historyMessage.artifacts is undefined? -->
+                                                            Saved Artifacts ({{ historyMessage.artifacts?.length }})
                                                 </summary>
                                                 <div class="artifact-grid">
                                                     <div
                                                         v-for="artifact in historyMessage.artifacts"
                                                         :key="artifact.dataset_id || artifact.name"
-                                                        class="artifact-grid-item"
-                                                    >
+                                                                class="artifact-grid-item">
                                                         <div class="artifact-name">
                                                             <button
                                                                 v-if="artifact.download_url"
                                                                 class="btn btn-link btn-sm p-0"
                                                                 type="button"
-                                                                @click="downloadArtifact(artifact)"
-                                                            >
+                                                                        @click="downloadArtifact(artifact)">
                                                                 {{ artifact.name || artifact.dataset_id }}
                                                             </button>
-                                                            <span v-else>{{ artifact.name || artifact.dataset_id }}</span>
+                                                                    <span v-else>{{
+                                                                        artifact.name || artifact.dataset_id
+                                                                    }}</span>
                                                             <span v-if="artifact.size" class="text-muted ml-1">
                                                                 ({{ formatSize(artifact.size) }})
                                                             </span>
@@ -2248,13 +2451,11 @@ function formatTime(timestamp: string) {
                                                                 artifact.mime_type.startsWith('image/') &&
                                                                 artifact.download_url
                                                             "
-                                                            class="artifact-preview mt-2"
-                                                        >
+                                                                    class="artifact-preview mt-2">
                                                             <img
                                                                 :src="artifact.download_url"
                                                                 :alt="artifact.name || 'plot preview'"
-                                                                class="plot-preview img-thumbnail"
-                                                            />
+                                                                        class="plot-preview img-thumbnail" />
                                                         </div>
                                                     </div>
                                                 </div>
@@ -2265,49 +2466,73 @@ function formatTime(timestamp: string) {
                                             class="mt-2 executed-code">
                                             <details open>
                                                 <summary class="text-muted">Executed Python Code</summary>
-                                                <pre>{{ historyMessage.agentResponse?.metadata?.executed_task?.code }}</pre>
+                                                        <pre>{{
+                                                            historyMessage.agentResponse?.metadata?.executed_task?.code
+                                                        }}</pre>
                                             </details>
-                                            <div v-if="historyMessage.agentResponse?.metadata?.stdout" class="mt-2">
+                                                    <div
+                                                        v-if="historyMessage.agentResponse?.metadata?.stdout"
+                                                        class="mt-2">
                                                 <details open>
                                                     <summary class="text-muted">Execution Stdout</summary>
-                                                    <pre>{{ historyMessage.agentResponse?.metadata?.stdout }}</pre>
+                                                            <pre>{{
+                                                                historyMessage.agentResponse?.metadata?.stdout
+                                                            }}</pre>
                                                 </details>
                                             </div>
-                                            <div v-if="historyMessage.agentResponse?.metadata?.stderr" class="mt-2">
+                                                    <div
+                                                        v-if="historyMessage.agentResponse?.metadata?.stderr"
+                                                        class="mt-2">
                                                 <details>
                                                     <summary class="text-muted">Execution Stderr</summary>
-                                                    <pre class="text-danger">{{ historyMessage.agentResponse?.metadata?.stderr }}</pre>
+                                                            <pre class="text-danger">{{
+                                                                historyMessage.agentResponse?.metadata?.stderr
+                                                            }}</pre>
                                                 </details>
                                             </div>
                                         </div>
                                     </div>
-                                    <div v-if="shouldShowAnalysisSteps(historyMessage)" class="analysis-steps card mt-2">
+                                            <div
+                                                v-if="shouldShowAnalysisSteps(historyMessage)"
+                                                class="analysis-steps card mt-2">
                                         <div
                                             v-for="(step, idx) in historyMessage.analysisSteps"
                                             :key="idx"
                                             class="analysis-step"
-                                            :class="[step.type, step.status && step.status !== 'pending' ? step.status : '']">
+                                                    :class="[
+                                                        step.type,
+                                                        step.status && step.status !== 'pending' ? step.status : '',
+                                                    ]">
                                             <div class="analysis-step-header">
                                                 <span class="step-label">
-                                                    {{ step.type === 'thought'
-                                                        ? 'Plan'
-                                                        : step.type === 'action'
-                                                            ? 'Action'
-                                                            : step.type === 'observation'
-                                                                ? 'Observation'
-                                                                : 'Conclusion' }}
+                                                            {{
+                                                                step.type === "thought"
+                                                                    ? "Plan"
+                                                                    : step.type === "action"
+                                                                      ? "Action"
+                                                                      : step.type === "observation"
+                                                                        ? "Observation"
+                                                                        : "Conclusion"
+                                                            }}
                                                 </span>
                                                 <span
-                                                    v-if="step.type === 'action' && step.status && step.status !== 'pending'"
+                                                            v-if="
+                                                                step.type === 'action' &&
+                                                                step.status &&
+                                                                step.status !== 'pending'
+                                                            "
                                                     class="step-status"
                                                     :class="step.status">
                                                     {{ step.status }}
                                                 </span>
                                                 <span
-                                                    v-else-if="step.type === 'observation' && step.success !== undefined"
+                                                            v-else-if="
+                                                                step.type === 'observation' &&
+                                                                step.success !== undefined
+                                                            "
                                                     class="step-status"
                                                     :class="step.success ? 'completed' : 'error'">
-                                                    {{ step.success ? 'success' : 'error' }}
+                                                            {{ step.success ? "success" : "error" }}
                                                 </span>
                                             </div>
                                             <div class="analysis-step-body">
@@ -2321,11 +2546,17 @@ function formatTime(timestamp: string) {
                                                         <small class="text-muted">stderr</small>
                                                         <pre class="text-danger">{{ step.stderr }}</pre>
                                                     </div>
-                                                    <div v-if="!step.stdout && !step.stderr">No textual output.</div>
+                                                            <div v-if="!step.stdout && !step.stderr">
+                                                                No textual output.
+                                                            </div>
                                                 </div>
                                                 <div v-else>{{ step.content }}</div>
-                                                <div v-if="step.type === 'action' && step.requirements?.length" class="step-requirements">
-                                                    <small class="text-muted">requirements: {{ step.requirements.join(', ') }}</small>
+                                                        <div
+                                                            v-if="step.type === 'action' && step.requirements?.length"
+                                                            class="step-requirements">
+                                                            <small class="text-muted"
+                                                                >requirements: {{ step.requirements.join(", ") }}</small
+                                                            >
                                                 </div>
                                             </div>
                                         </div>
@@ -2366,7 +2597,6 @@ function formatTime(timestamp: string) {
                         <span v-if="message.feedback" class="feedback-text">Thanks for feedback!</span>
                     </div>
                     </div>
-
                 </div>
             </div>
         </div>
@@ -2397,7 +2627,6 @@ function formatTime(timestamp: string) {
                 <small class="text-muted">
                     Press Enter to send, Shift+Enter for new line. Try asking about tools, errors, or workflows!
                 </small>
-            </div>
         </div>
     </div>
 </div>
@@ -2630,16 +2859,6 @@ function formatTime(timestamp: string) {
     background: white;
     border: 1px solid #dee2e6;
 }
-
-
-
-
-
-
-
-
-
-
 
 .message {
     margin-bottom: 1.5rem;
@@ -2896,5 +3115,4 @@ function formatTime(timestamp: string) {
         }
     }
 }
-
 </style>
