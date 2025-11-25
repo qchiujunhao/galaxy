@@ -290,13 +290,17 @@ function fileExists(py: any, path: string): boolean {
     }
 }
 
-async function seedPythonEnvironment(py: any, datasets: Array<{ id: string; name: string; path: string; size: number; aliases: string[] }>, aliasMap: PyodideAliasMap) {
+async function seedPythonEnvironment(
+    py: any,
+    datasets: Array<{ id: string; name: string; path: string; size: number; aliases: string[] }>,
+    aliasMap: PyodideAliasMap,
+) {
     const datasetJson = JSON.stringify(datasets);
     const aliasJson = JSON.stringify(aliasMap);
     py.globals.set("_GXY_DATASETS_JSON", datasetJson);
     py.globals.set("_GXY_ALIAS_JSON", aliasJson);
     await py.runPythonAsync(
-        `import json\nfrom pathlib import Path\nimport builtins as _gxy_builtins\nimport warnings as _gxy_warnings\n\ntry:\n    _gxy_warnings.filterwarnings(\n        "ignore",\n        message="Pyarrow will become a required dependency of pandas.*",\n        category=DeprecationWarning,\n    )\nexcept Exception:\n    pass\n\ntry:\n    _DATASET_ENTRIES = json.loads(globals().pop("_GXY_DATASETS_JSON"))\nexcept KeyError:\n    _DATASET_ENTRIES = []\n\ntry:\n    globals().pop("_GXY_ALIAS_JSON")\nexcept KeyError:\n    pass\n\n_DATASET_INDEX = {}\nfor entry in _DATASET_ENTRIES:\n    aliases = entry.get("aliases") or []\n    for alias in aliases:\n        if alias:\n            _DATASET_INDEX[alias] = entry\n    dataset_id = entry.get("id")\n    if dataset_id:\n        _DATASET_INDEX.setdefault(dataset_id, entry)\n\noutputs_root = Path("/tmp/galaxy")\noutputs_dir = outputs_root / "outputs_dir"\noutputs_dir.mkdir(parents=True, exist_ok=True)\ngenerated_dir = outputs_dir / "generated_file"\ngenerated_dir.mkdir(parents=True, exist_ok=True)\n\nalias_dir = Path("generated_file")\nif not alias_dir.exists():\n    try:\n        alias_dir.symlink_to(generated_dir)\n    except Exception:\n        if not alias_dir.exists():\n            alias_dir.mkdir(parents=True, exist_ok=True)\n\n_original_open = globals().get("_GXY_ORIGINAL_OPEN")\nif _original_open is None:\n    _original_open = _gxy_builtins.open\n    globals()[\"_GXY_ORIGINAL_OPEN\"] = _original_open\n\n\ndef _resolve_dataset(alias: str):\n    key = alias or \"\"\n    entry = _DATASET_INDEX.get(key)\n    if entry is None:\n        raise KeyError(f\"Unknown dataset alias: {alias}\")\n    return entry\n\ndef get_dataset_path(alias: str) -> str:\n    return _resolve_dataset(alias)[\"path\"]\n\ndef load_dataset(alias: str, **read_kwargs):\n    entry = _resolve_dataset(alias)\n    path = entry[\"path\"]\n    import pandas as pd\n    name = entry.get(\"name\") or \"\"\n    if not read_kwargs and (name.lower().endswith(\".tsv\") or path.lower().endswith(\".tsv\")):\n        read_kwargs.setdefault(\"sep\", \"\\t\")\n    return pd.read_csv(path, **read_kwargs)\n\ndef _open_with_alias(path, *args, **kwargs):\n    if isinstance(path, str) and path in _DATASET_INDEX:\n        return _original_open(_DATASET_INDEX[path][\"path\"], *args, **kwargs)\n    return _original_open(path, *args, **kwargs)\n\n_gxy_builtins.open = _open_with_alias\n\nglobals()[\"_GXY_ORIGINAL_LOAD_DATASET\"] = load_dataset\nglobals()[\"_GXY_ORIGINAL_GET_DATASET_PATH\"] = get_dataset_path\nimport os as _gxy_os\n_gxy_os.environ.setdefault("MPLBACKEND", "agg")\ntry:\n    import matplotlib\n    matplotlib.use(\"agg\")\nexcept Exception:\n    pass\n`
+        `import json\nfrom pathlib import Path\nimport builtins as _gxy_builtins\nimport warnings as _gxy_warnings\n\ntry:\n    _gxy_warnings.filterwarnings(\n        "ignore",\n        message="Pyarrow will become a required dependency of pandas.*",\n        category=DeprecationWarning,\n    )\nexcept Exception:\n    pass\n\ntry:\n    _DATASET_ENTRIES = json.loads(globals().pop("_GXY_DATASETS_JSON"))\nexcept KeyError:\n    _DATASET_ENTRIES = []\n\ntry:\n    globals().pop("_GXY_ALIAS_JSON")\nexcept KeyError:\n    pass\n\n_DATASET_INDEX = {}\nfor entry in _DATASET_ENTRIES:\n    aliases = entry.get("aliases") or []\n    for alias in aliases:\n        if alias:\n            _DATASET_INDEX[alias] = entry\n    dataset_id = entry.get("id")\n    if dataset_id:\n        _DATASET_INDEX.setdefault(dataset_id, entry)\n\noutputs_root = Path("/tmp/galaxy")\noutputs_dir = outputs_root / "outputs_dir"\noutputs_dir.mkdir(parents=True, exist_ok=True)\ngenerated_dir = outputs_dir / "generated_file"\ngenerated_dir.mkdir(parents=True, exist_ok=True)\n\nalias_dir = Path("generated_file")\nif not alias_dir.exists():\n    try:\n        alias_dir.symlink_to(generated_dir)\n    except Exception:\n        if not alias_dir.exists():\n            alias_dir.mkdir(parents=True, exist_ok=True)\n\n_original_open = globals().get("_GXY_ORIGINAL_OPEN")\nif _original_open is None:\n    _original_open = _gxy_builtins.open\n    globals()[\"_GXY_ORIGINAL_OPEN\"] = _original_open\n\n\ndef _resolve_dataset(alias: str):\n    key = alias or \"\"\n    entry = _DATASET_INDEX.get(key)\n    if entry is None:\n        raise KeyError(f\"Unknown dataset alias: {alias}\")\n    return entry\n\ndef get_dataset_path(alias: str) -> str:\n    return _resolve_dataset(alias)[\"path\"]\n\ndef load_dataset(alias: str, **read_kwargs):\n    entry = _resolve_dataset(alias)\n    path = entry[\"path\"]\n    import pandas as pd\n    name = entry.get(\"name\") or \"\"\n    if not read_kwargs and (name.lower().endswith(\".tsv\") or path.lower().endswith(\".tsv\")):\n        read_kwargs.setdefault(\"sep\", \"\\t\")\n    return pd.read_csv(path, **read_kwargs)\n\ndef _open_with_alias(path, *args, **kwargs):\n    if isinstance(path, str) and path in _DATASET_INDEX:\n        return _original_open(_DATASET_INDEX[path][\"path\"], *args, **kwargs)\n    return _original_open(path, *args, **kwargs)\n\n_gxy_builtins.open = _open_with_alias\n\nglobals()[\"_GXY_ORIGINAL_LOAD_DATASET\"] = load_dataset\nglobals()[\"_GXY_ORIGINAL_GET_DATASET_PATH\"] = get_dataset_path\nimport os as _gxy_os\n_gxy_os.environ.setdefault("MPLBACKEND", "agg")\ntry:\n    import matplotlib\n    matplotlib.use(\"agg\")\nexcept Exception:\n    pass\n`,
     );
 }
 
@@ -321,7 +325,7 @@ async function runUserCode(py: any, code: string): Promise<{ success: boolean; e
                     "    ast.parse(_GXY_USER_CODE)",
                     "except SyntaxError as exc:",
                     "    raise SyntaxError(f'Syntax error in generated code: {exc}')",
-                ].join("\n")
+                ].join("\n"),
             );
         } finally {
             await py.runPythonAsync("globals().pop('_GXY_USER_CODE', None)");
@@ -333,7 +337,7 @@ async function runUserCode(py: any, code: string): Promise<{ success: boolean; e
                 "    files = os.listdir('generated_file')\n" +
                 "except Exception:\n" +
                 "    files = []\n" +
-                "json.dumps(sorted(files))\n"
+                "json.dumps(sorted(files))\n",
         );
         const preArtifacts = new Set<string>(JSON.parse(preArtifactsJson));
 
@@ -349,13 +353,13 @@ async function runUserCode(py: any, code: string): Promise<{ success: boolean; e
                 "    if callable(value):",
                 "        continue",
                 "    if isinstance(value, (int, float, str, bool)):",
-                "        summary_lines.append(f\"{key} = {value!r}\")",
+                '        summary_lines.append(f"{key} = {value!r}")',
                 "    elif isinstance(value, (list, tuple)) and len(value) <= 10:",
-                "        summary_lines.append(f\"{key} = {value!r}\")",
+                '        summary_lines.append(f"{key} = {value!r}")',
                 "    elif isinstance(value, dict) and len(value) <= 10:",
                 "        try:",
                 "            preview = {k: value[k] for k in list(value)[:5]}",
-                "            summary_lines.append(f\"{key} = {preview!r}\")",
+                '            summary_lines.append(f"{key} = {preview!r}")',
                 "        except Exception:",
                 "            pass",
                 "try:",
@@ -364,7 +368,7 @@ async function runUserCode(py: any, code: string): Promise<{ success: boolean; e
                 "    pass",
                 "result = '\\n'.join(summary_lines)",
                 "result",
-            ].join("\n")
+            ].join("\n"),
         );
 
         const postArtifactsJson = await py.runPythonAsync(
@@ -373,7 +377,7 @@ async function runUserCode(py: any, code: string): Promise<{ success: boolean; e
                 "    files = os.listdir('generated_file')\n" +
                 "except Exception:\n" +
                 "    files = []\n" +
-                "json.dumps(sorted(files))\n"
+                "json.dumps(sorted(files))\n",
         );
         const postArtifacts: string[] = JSON.parse(postArtifactsJson);
         const newArtifacts = postArtifacts.filter((name) => !preArtifacts.has(name));
@@ -413,7 +417,7 @@ async function runUserCode(py: any, code: string): Promise<{ success: boolean; e
                     "    _gxy_builtins.open = original_open",
                     "load_dataset = globals().get('_GXY_ORIGINAL_LOAD_DATASET', load_dataset)",
                     "get_dataset_path = globals().get('_GXY_ORIGINAL_GET_DATASET_PATH', get_dataset_path)",
-                ].join("\n")
+                ].join("\n"),
             );
         } catch (restoreError) {
             // ignore restoration issues

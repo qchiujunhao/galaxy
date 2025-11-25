@@ -57,7 +57,9 @@ interface PendingRequest {
     hooks: RunnerHooks;
 }
 
-const isSupported = ref(typeof window !== "undefined" && typeof Worker !== "undefined" && typeof WebAssembly !== "undefined");
+const isSupported = ref(
+    typeof window !== "undefined" && typeof Worker !== "undefined" && typeof WebAssembly !== "undefined",
+);
 const isRunning = ref(false);
 
 let worker: Worker | null = null;

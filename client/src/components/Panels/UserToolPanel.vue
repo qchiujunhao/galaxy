@@ -31,7 +31,8 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits(["unprivileged-tool-clicked", "onInsertTool", "onEditTool", "onCreateTool"]);
 
 const unprivilegedToolStore = useUnprivilegedToolStore();
-const { unprivilegedTools, canUseUnprivilegedTools, loadError, requiresAuthentication, isLoading } = storeToRefs(unprivilegedToolStore);
+const { unprivilegedTools, canUseUnprivilegedTools, loadError, requiresAuthentication, isLoading } =
+    storeToRefs(unprivilegedToolStore);
 
 async function loadUnprivilegedTools(offset: number, limit: number) {
     return { items: unprivilegedTools.value || [], total: unprivilegedTools.value?.length || 0 };
