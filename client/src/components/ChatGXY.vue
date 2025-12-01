@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { library } from "@fortawesome/fontawesome-svg-core";
 import {
     faClock,
     faHistory,
@@ -11,6 +12,9 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/vue-fontawesome";
 import { BSkeleton } from "bootstrap-vue";
+
+import { nextTick, onMounted, ref } from "vue";
+
 import { storeToRefs } from "pinia";
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 
@@ -35,6 +39,8 @@ import ActionCard from "./ChatGXY/ActionCard.vue";
 import DatasetSelector from "./Form/Elements/FormData/FormData.vue";
 import LoadingSpan from "@/components/LoadingSpan.vue";
 
+library.add(faThumbsUp, faThumbsDown, faPaperPlane, faUser, faMagic, faHistory, faTrash, faClock);
+  
 interface AnalysisStep {
     type: "thought" | "action" | "observation" | "conclusion";
     content: string;
@@ -44,7 +50,7 @@ interface AnalysisStep {
     stderr?: string;
     success?: boolean;
 }
-
+  
 interface Message {
     id: string;
     role: "user" | "assistant";
@@ -179,7 +185,6 @@ const agentTypes = [
     { value: "dspy_tool_recommendation", label: "🤖 DSPy Tools", description: "Advanced reasoning for tool selection" },
     { value: "custom_tool", label: "⚡ Custom Tool", description: "Create custom tools" },
     { value: "data_analysis", label: "🧪 Data Analysis", description: "Explore datasets with generated code" },
-    // { value: "data_analysis_dspy", label: "📊 Data Analysis (DSPy)", description: "Iterative planning with DSPy + auto code execution" },
     { value: "gtn_training", label: "📚 Training Materials", description: "Find tutorials and guides" },
 ];
 
@@ -1210,6 +1215,10 @@ async function submitQuery() {
         return;
     }
     pendingCollapsedMessages.length = 0;
+async function submitQuery() {
+    if (!query.value.trim()) {
+        return;
+    }
 
     const userMessage: Message = {
         id: generateId(),
@@ -1276,9 +1285,33 @@ async function submitQuery() {
             await nextTick();
             scrollToBottom();
         } else if (data) {
-            const fallbackAgent = selectedAgentType.value === "auto" ? "router" : selectedAgentType.value;
-            appendAssistantMessage(data, fallbackAgent);
+            // Extract agent response if available
+            const agentResponse = (data as any)?.agent_response;
+            const content = typeof data === "string" ? data : (data as any)?.response || "No response received";
 
+            // Get the exchange ID if returned
+            const exchangeId = (data as any)?.exchange_id;
+            if (exchangeId) {
+                currentChatId.value = exchangeId;
+            }
+
+            const assistantMessage: Message = {
+                id: generateId(),
+                role: "assistant",
+                content: content,
+                timestamp: new Date(),
+                agentType:
+                    agentResponse?.agent_type ||
+                    (selectedAgentType.value === "auto" ? "router" : selectedAgentType.value),
+                confidence: agentResponse?.confidence || (data as any)?.confidence || "medium",
+                feedback: null,
+                agentResponse: agentResponse,
+                suggestions: agentResponse?.suggestions || [],
+                routingInfo: (data as any)?.routing_info,
+            };
+            messages.value.push(assistantMessage);
+
+            // Scroll to bottom after adding assistant message
             await nextTick();
             scrollToBottom();
         }
@@ -1326,8 +1359,6 @@ async function sendFeedback(messageId: string, value: "up" | "down") {
         if (currentChatId.value) {
             try {
                 const feedbackValue = value === "up" ? 1 : 0;
-
-                // @ts-ignore TODO: Add pydantic model later
                 const { error } = await GalaxyApi().PUT("/api/chat/exchange/{exchange_id}/feedback", {
                     params: {
                         path: { exchange_id: currentChatId.value },

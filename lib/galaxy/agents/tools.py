@@ -4,6 +4,7 @@ Tool recommendation agent for suggesting appropriate Galaxy tools.
 
 import logging
 import re
+from pathlib import Path
 from typing import (
     Any,
     Dict,
@@ -85,14 +86,8 @@ class ToolRecommendationAgent(BaseGalaxyAgent):
 
     def get_system_prompt(self) -> str:
         """Get the system prompt for tool recommendation."""
-        return """
-        You are a Galaxy Project expert specializing in tool discovery and recommendation.
-        Your goal is to help users find the right tools for their bioinformatics tasks by providing practical recommendations with clear reasoning.
-
-        - Understand the user's task and data types.
-        - Recommend specific, relevant Galaxy tools.
-        - If the user shows learning intent (e.g., asks for tutorials, guides, or examples), use the `get_training_materials` tool to find relevant training resources for the recommended tools.
-        """
+        prompt_path = Path(__file__).parent / "prompts" / "tool_recommendation.md"
+        return prompt_path.read_text()
 
     async def search_tools(self, query: str, category: Optional[str] = None) -> List[Dict[str, Any]]:
         """Search for tools in the Galaxy toolbox."""
@@ -542,13 +537,3 @@ class ToolRecommendationAgent(BaseGalaxyAgent):
             "suggestions": suggestions,
         }
 
-    def _get_model_name(self) -> str:
-        """Get the model name for tool recommendation."""
-        # Check for global AI model configuration first
-        if hasattr(self.deps.config, "ai_model") and self.deps.config.ai_model:
-            # Use the global AI model configuration
-            return f"openai:{self.deps.config.ai_model}"
-
-        # Fall back to agent-specific configuration
-        agent_config = getattr(self.deps.config, "agents", {}).get("tool_recommendation", {})
-        return agent_config.get("model", "openai:gpt-3.5-turbo")

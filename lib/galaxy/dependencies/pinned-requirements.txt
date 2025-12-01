@@ -2,14 +2,14 @@
 #    uv export --frozen --no-annotate --no-hashes --no-dev
 a2wsgi==1.10.10
 adal==1.2.7
-aiobotocore==2.25.1
+aiobotocore==2.25.2
 aiofiles==25.1.0
 aiohappyeyeballs==2.6.1
 aiohttp==3.13.2
 aioitertools==0.13.0
 aiosignal==1.4.0
 alembic==1.16.5 ; python_full_version < '3.10'
-alembic==1.17.1 ; python_full_version >= '3.10'
+alembic==1.17.2 ; python_full_version >= '3.10'
 amqp==5.3.1
 annotated-types==0.7.0
 anyio==4.11.0
@@ -26,23 +26,24 @@ bagit-profile==1.3.1
 bcrypt==5.0.0
 bdbag==1.8.0
 beaker==1.13.0
-billiard==4.2.2
+billiard==4.2.3
 bioblend==1.7.0
 bleach==6.2.0 ; python_full_version < '3.10'
 bleach==6.3.0 ; python_full_version >= '3.10'
 boltons==25.0.0
 boto==2.49.0
-botocore==1.40.61
+botocore==1.40.70
 bx-python==0.14.0
-cachecontrol==0.14.3
-cachetools==6.2.1
+cachecontrol==0.14.3 ; python_full_version < '3.10'
+cachecontrol==0.14.4 ; python_full_version >= '3.10'
+cachetools==6.2.2
 celery==5.5.3
-certifi==2025.10.5
+certifi==2025.11.12
 cffi==2.0.0 ; implementation_name == 'pypy' or platform_python_implementation != 'PyPy'
 charset-normalizer==3.4.4
 circus==0.19.0
 click==8.1.8 ; python_full_version < '3.10'
-click==8.3.0 ; python_full_version >= '3.10'
+click==8.3.1 ; python_full_version >= '3.10'
 click-didyoumean==0.3.1
 click-plugins==1.1.1.2
 click-repl==0.3.0
@@ -68,7 +69,7 @@ dparse==0.6.4
 edam-ontology==1.25.3
 email-validator==2.3.0
 et-xmlfile==2.0.0
-exceptiongroup==1.3.0 ; python_full_version < '3.11'
+exceptiongroup==1.3.1 ; python_full_version < '3.11'
 fastapi==0.118.3
 filelock==3.19.1 ; python_full_version < '3.10'
 filelock==3.20.0 ; python_full_version >= '3.10'
@@ -119,7 +120,7 @@ markdown==3.10 ; python_full_version >= '3.10'
 markdown-it-py==3.0.0
 markupsafe==3.0.3
 mdurl==0.1.2
-mercurial==7.1.1
+mercurial==7.1.2
 mistune==3.1.4
 more-itertools==10.8.0
 mrcfile==1.5.4
@@ -134,7 +135,7 @@ nodejs-wheel==22.20.0
 nodejs-wheel-binaries==22.20.0
 numpy==2.0.2 ; python_full_version < '3.10'
 numpy==2.2.6 ; python_full_version == '3.10.*'
-numpy==2.3.4 ; python_full_version >= '3.11'
+numpy==2.3.5 ; python_full_version >= '3.11'
 oauthlib==3.3.1
 openpyxl==3.1.5
 orjson==3.11.4
@@ -151,7 +152,7 @@ pillow==12.0.0 ; python_full_version >= '3.10'
 prompt-toolkit==3.0.52
 propcache==0.4.1
 proto-plus==1.26.1
-protobuf==6.33.0
+protobuf==6.33.1
 prov==1.5.1
 psutil==7.1.3
 pulsar-galaxy-lib==0.15.11
@@ -169,7 +170,7 @@ pygments==2.19.2
 pyjwt==2.10.1
 pykwalify==1.8.0
 pylibmagic==0.5.0
-pynacl==1.6.0
+pynacl==1.6.1
 pyparsing==3.2.5
 pypng==0.20220715.0
 pyreadline3==3.5.4 ; sys_platform == 'win32'
@@ -197,10 +198,10 @@ rich-argparse==1.7.2
 rocrate==0.14.2
 routes==2.5.1
 rpds-py==0.27.1 ; python_full_version < '3.10'
-rpds-py==0.28.0 ; python_full_version >= '3.10'
+rpds-py==0.29.0 ; python_full_version >= '3.10'
 rsa==4.9.1
 ruamel-yaml==0.18.16
-ruamel-yaml-clib==0.2.14 ; python_full_version < '3.14' and platform_python_implementation == 'CPython'
+ruamel-yaml-clib==0.2.15 ; python_full_version < '3.14' and platform_python_implementation == 'CPython'
 s3fs==2025.10.0
 schema-salad==8.9.20251102115403
 setuptools==80.9.0

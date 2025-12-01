@@ -21,107 +21,43 @@ from typing import (
     Union,
 )
 
-from pydantic import BaseModel
-
 from galaxy.managers.context import ProvidesUserContext
 from galaxy.model import User
+from galaxy.schema.agents import (
+    ActionSuggestion,
+    ActionType,
+    ConfidenceLevel,
+)
 
 # Try to import pydantic-ai components
 try:
     from pydantic_ai import Agent
     from pydantic_ai.exceptions import UnexpectedModelBehavior
-    try:  # pydantic-ai renamed OpenAIModel in newer versions
-        from pydantic_ai.models.openai import OpenAIModel as _OpenAIModel
-    except ImportError:  # pragma: no cover - compatibility shim
-        from pydantic_ai.models.openai import OpenAIModel as _OpenAIModel
+    from pydantic_ai.models.openai import OpenAIChatModel
     from pydantic_ai.providers.openai import OpenAIProvider
 
-    OpenAIModel = _OpenAIModel
     HAS_PYDANTIC_AI = True
-except ImportError as exc:  # pragma: no cover - library missing
+except ImportError:
     HAS_PYDANTIC_AI = False
     Agent = None
     UnexpectedModelBehavior = Exception
-    OpenAIModel = None
+    OpenAIChatModel = None
     OpenAIProvider = None
-    logging.getLogger(__name__).warning("Failed to import pydantic_ai components: %s", exc)
 
 log = logging.getLogger(__name__)
 
 
-class ConfidenceLevel(str, Enum):
-    """Confidence levels for agent responses."""
+# Agent type constants
+class AgentType:
+    """Constants for registered agent types."""
 
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-
-
-class ActionType(str, Enum):
-    """Types of actions agents can suggest."""
-
-    TOOL_RUN = "tool_run"
-    PARAMETER_CHANGE = "parameter_change"
-    WORKFLOW_STEP = "workflow_step"
-    DOCUMENTATION = "documentation"
-    CONTACT_SUPPORT = "contact_support"
-    VIEW_EXTERNAL = "view_external"  # Open external URL in new tab
-    SAVE_TOOL = "save_tool"
-    TEST_TOOL = "test_tool"
-    REFINE_QUERY = "refine_query"
-    PYODIDE_EXECUTE = "pyodide_execute"
-
-
-class ActionSuggestion(BaseModel):
-    """Structured suggestion for user action."""
-
-    action_type: ActionType
-    description: str
-    parameters: Dict[str, Any] = {}
-    confidence: str  # "low", "medium", or "high"
-    priority: int = 1  # 1=high, 2=medium, 3=low
-
-
-class AgentResponse(BaseModel):
-    """Structured response from an AI agent."""
-
-    content: str
-    confidence: str  # "low", "medium", or "high"
-    agent_type: str
-    suggestions: List[ActionSuggestion] = []
-    metadata: Dict[str, Any] = {}
-    reasoning: Optional[str] = None
-
-
-class Artifact(BaseModel):
-    """Artifact produced by executing generated code."""
-
-    name: str
-    mime_type: str
-    size: int
-    content_base64: Optional[str] = None
-    temp_path: Optional[str] = None
-
-
-class ExecutionTask(BaseModel):
-    """Description of work to execute in a sandbox (e.g., Pyodide)."""
-
-    code: str
-    requirements: List[str] = []
-    inputs: Dict[str, Any] = {}
-    timeout_seconds: int = 120
-    task_id: Optional[str] = None
-
-
-class ExecutionResult(BaseModel):
-    """Result returned from executing an `ExecutionTask`."""
-
-    task_id: Optional[str] = None
-    stdout: str = ""
-    stderr: str = ""
-    artifacts: List[Artifact] = []
-    metadata: Dict[str, Any] = {}
-    success: bool = True
+    ROUTER = "router"
+    ERROR_ANALYSIS = "error_analysis"
+    TOOL_RECOMMENDATION = "tool_recommendation"
+    CUSTOM_TOOL = "custom_tool"
+    GTN_TRAINING = "gtn_training"
+    ORCHESTRATOR = "orchestrator"
+    DSPY_TOOL_RECOMMENDATION = "dspy_tool_recommendation"
 
 
 @dataclass
@@ -136,12 +72,11 @@ class GalaxyAgentDependencies:
     dataset_manager: Optional[Any] = None
     workflow_manager: Optional[Any] = None
     tool_cache: Optional[Any] = None
+    toolbox: Optional[Any] = None
 
 
 class BaseGalaxyAgent(ABC):
     """Base class for all Galaxy AI agents."""
-
-    USE_PYDANTIC_AGENT: bool = True
 
     def __init__(self, deps: GalaxyAgentDependencies):
         """Initialize the agent with dependencies."""
@@ -153,13 +88,12 @@ class BaseGalaxyAgent(ABC):
         snake_case = re.sub(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "_", class_name).lower()
         self.agent_type = snake_case.replace("_agent", "").replace("agent", "")
 
-        if self.USE_PYDANTIC_AGENT:
-            if not HAS_PYDANTIC_AI:
-                raise ImportError(
-                    "pydantic-ai is required for agent functionality. " "Please install with: pip install pydantic-ai"
-                )
+        if not HAS_PYDANTIC_AI:
+            raise ImportError(
+                "pydantic-ai is required for agent functionality. " "Please install with: pip install pydantic-ai"
+            )
 
-            self.agent = self._create_agent()
+        self.agent = self._create_agent()
 
     @abstractmethod
     def _create_agent(self) -> Agent:
@@ -170,6 +104,41 @@ class BaseGalaxyAgent(ABC):
     def get_system_prompt(self) -> str:
         """Return the system prompt for this agent."""
         pass
+
+    def _validate_query(self, query: str) -> Optional[str]:
+        """
+        Validate query input for security and safety.
+
+        Returns:
+            None if valid, error message if invalid
+        """
+        if not query or not isinstance(query, str):
+            return "Query must be a non-empty string"
+
+        # Get max query length from config (default 10000 chars)
+        max_length = self._get_agent_config("max_query_length", 10000)
+
+        if len(query) > max_length:
+            return f"Query too long ({len(query)} chars). Maximum is {max_length} characters."
+
+        # Check for obvious prompt injection patterns
+        suspicious_patterns = [
+            "ignore previous instructions",
+            "ignore all previous",
+            "disregard all previous",
+            "forget all previous",
+            "new instructions:",
+            "system:",
+            "assistant:",
+        ]
+
+        query_lower = query.lower()
+        for pattern in suspicious_patterns:
+            if pattern in query_lower:
+                log.warning(f"Potential prompt injection detected in {self.agent_type} query: {pattern}")
+                # Don't reject, just log - could be legitimate
+
+        return None
 
     async def process(self, query: str, context: Dict[str, Any] = None) -> AgentResponse:
         """
@@ -182,9 +151,15 @@ class BaseGalaxyAgent(ABC):
         Returns:
             AgentResponse with structured output
         """
-        if not self.USE_PYDANTIC_AGENT:
-            raise NotImplementedError(
-                "Agents that disable the pydantic runtime must override `process`."
+        # Validate input
+        validation_error = self._validate_query(query)
+        if validation_error:
+            return AgentResponse(
+                content=validation_error,
+                confidence="low",
+                agent_type=self.agent_type,
+                suggestions=[],
+                metadata={"validation_error": True},
             )
 
         try:
@@ -205,6 +180,30 @@ class BaseGalaxyAgent(ABC):
             log.error(f"Error in {self.agent_type} agent: {e}")
             return self._get_fallback_response(query, str(e))
 
+    def _sanitize_for_logging(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Sanitize dictionary for safe logging by masking sensitive values.
+
+        Args:
+            data: Dictionary potentially containing sensitive information
+
+        Returns:
+            Sanitized copy safe for logging
+        """
+        sensitive_keys = {"api_key", "apikey", "key", "token", "secret", "password", "credential"}
+        sanitized = {}
+
+        for key, value in data.items():
+            key_lower = key.lower()
+            if any(sensitive in key_lower for sensitive in sensitive_keys):
+                sanitized[key] = "***REDACTED***"
+            elif isinstance(value, dict):
+                sanitized[key] = self._sanitize_for_logging(value)
+            else:
+                sanitized[key] = value
+
+        return sanitized
+
     async def _run_with_retry(self, prompt: str, max_retries: int = 3, base_delay: float = 1.0):
         """Run the agent, with exponential backoff for retries."""
         last_exception = None
@@ -223,8 +222,7 @@ class BaseGalaxyAgent(ABC):
                 last_exception = e
                 error_msg = str(e).lower()
 
-                # A fairly generic list of retryable network errors.
-                # TODO: Make this more specific to the underlying provider's exceptions.
+                # Generic retry indicators for network errors across providers.
                 is_retryable = any(
                     indicator in error_msg
                     for indicator in [
@@ -389,7 +387,7 @@ class BaseGalaxyAgent(ABC):
 
         # Check if we need to use a custom base URL
         if base_url:
-            if HAS_PYDANTIC_AI and OpenAIModel is not None:
+            if HAS_PYDANTIC_AI and OpenAIChatModel:
                 # Remove the "openai:" prefix if present
                 if model_name.startswith("openai:"):
                     model_name = model_name[7:]
@@ -399,8 +397,8 @@ class BaseGalaxyAgent(ABC):
                     api_key=api_key or "sk-local-test-master-key",
                     base_url=base_url,
                 )
-                # Return the OpenAIModel with custom provider
-                return OpenAIModel(model_name, provider=custom_provider)
+                # Return the OpenAIChatModel with custom provider
+                return OpenAIChatModel(model_name, provider=custom_provider)
 
         # Default case - use standard OpenAI configuration
         if api_key:
@@ -416,7 +414,7 @@ class BaseGalaxyAgent(ABC):
         """Get the max tokens setting for this agent."""
         return self._get_agent_config("max_tokens", 2000)
 
-    async def _call_agent_from_tool(self, agent_type: str, query: str, ctx, usage=None) -> str:
+    async def _call_agent_from_tool(self, agent_type: str, query: str, ctx, usage=None, context: Dict[str, Any] = None) -> str:
         """
         Centralized helper method for calling other agents from within tool functions.
 
@@ -428,6 +426,7 @@ class BaseGalaxyAgent(ABC):
             query: Query to send to the target agent
             ctx: RunContext from the calling tool function
             usage: Optional usage tracking object (defaults to ctx.usage)
+            context: Optional context dict with conversation history, metadata, etc.
 
         Returns:
             String response from the target agent
@@ -439,7 +438,8 @@ class BaseGalaxyAgent(ABC):
             response = await self._call_agent_from_tool(
                 "tool_recommendation",
                 f"Find alternatives for: {task}",
-                ctx
+                ctx,
+                context={"conversation_history": history}
             )
         """
         try:
@@ -449,6 +449,19 @@ class BaseGalaxyAgent(ABC):
             # Get the target agent
             target_agent = agent_registry.get_agent(agent_type, ctx.deps)
 
+            # Prepare query with context if available
+            full_query = query
+            if context and "conversation_history" in context:
+                history = context["conversation_history"]
+                if history and len(history) > 0:
+                    # Add conversation history to query for better context
+                    history_text = "Previous conversation:\n"
+                    for msg in history[-4:]:  # Last 4 messages for context
+                        role = msg.get("role", "unknown")
+                        content = msg.get("content", "")[:200]  # Truncate long messages
+                        history_text += f"{role}: {content}\n"
+                    full_query = f"{history_text}\nCurrent request: {query}"
+
             # Get model settings for the target agent
             target_model_settings = {
                 "temperature": target_agent._get_temperature(),
@@ -457,7 +470,7 @@ class BaseGalaxyAgent(ABC):
 
             # Call the agent with proper usage tracking and model settings
             result = await target_agent.agent.run(
-                query,
+                full_query,
                 deps=ctx.deps,
                 usage=usage or ctx.usage,  # Use provided usage or fall back to ctx.usage
                 model_settings=target_model_settings,
@@ -506,7 +519,7 @@ class SimpleGalaxyAgent(BaseGalaxyAgent):
             },
         )
 
-    def _extract_confidence(self, content: str) -> ConfidenceLevel:
+    def _extract_confidence(self, content: str) -> Union[str, ConfidenceLevel]:
         """Extract confidence level from response content."""
         content_lower = content.lower()
 

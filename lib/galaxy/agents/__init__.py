@@ -6,6 +6,7 @@ Agents provide specialized assistance for workflows, tool errors, data quality, 
 """
 
 from .base import (
+    AgentType,
     BaseGalaxyAgent,
     GalaxyAgentDependencies,
 )
@@ -20,6 +21,7 @@ from .router import QueryRouterAgent
 from .tools import ToolRecommendationAgent
 
 __all__ = [
+    "AgentType",
     "BaseGalaxyAgent",
     "GalaxyAgentDependencies",
     "AgentRegistry",
@@ -30,7 +32,6 @@ __all__ = [
     "GTNTrainingAgent",
     "WorkflowOrchestratorAgent",
     "DSPyGalaxyAgent",
-    # "DataAnalysisDSPyAgent",
 ]
 
 # Global agent registry instance

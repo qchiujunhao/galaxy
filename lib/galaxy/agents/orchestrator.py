@@ -4,6 +4,7 @@ Workflow orchestration agent for coordinating multiple agents on complex tasks.
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import (
     Any,
     Dict,
@@ -63,29 +64,8 @@ class WorkflowOrchestratorAgent(BaseGalaxyAgent):
 
     def get_system_prompt(self) -> str:
         """Get the system prompt for agent selection."""
-        return """
-        You coordinate multiple Galaxy agents for complex queries. Determine which agents to call and in what order.
-
-        AVAILABLE AGENTS:
-        - error_analysis: Debug job failures and errors
-        - tool_recommendation: Find appropriate tools for tasks
-        - gtn_training: Provide tutorials and learning materials
-        - custom_tool: Create new Galaxy tools
-        - data_analysis: Exploratory data analysis agent (DSPy variant temporarily unavailable)
-
-        EXAMPLES:
-        Query: "My RNA-seq tool failed, help me fix it and find alternatives"
-        Response: agents=["error_analysis", "tool_recommendation"], sequential=true, reasoning="Fix error first, then recommend alternatives"
-
-        Query: "I need help with variant calling and also want tutorials"
-        Response: agents=["tool_recommendation", "gtn_training"], sequential=false, reasoning="Both can run in parallel"
-
-        RULES:
-        - Most queries only need 1-2 agents
-        - Use sequential=true when one agent's output helps another
-        - Use sequential=false when agents can work independently
-        - Be conservative - don't over-complicate simple requests
-        """
+        prompt_path = Path(__file__).parent / "prompts" / "orchestrator.md"
+        return prompt_path.read_text()
 
     async def process(self, query: str, context: Dict[str, Any] = None) -> AgentResponse:
         """
@@ -173,25 +153,43 @@ class WorkflowOrchestratorAgent(BaseGalaxyAgent):
 
         return AgentPlan(agents=agents, sequential=sequential, reasoning=reasoning)
 
+    def _get_agent_timeout(self) -> float:
+        """Get timeout in seconds for individual agent execution."""
+        return self._get_agent_config("agent_timeout", 60.0)
+
     async def _execute_sequential(
         self, agents: List[str], query: str, context: Dict[str, Any] = None
     ) -> Dict[str, AgentResponse]:
-        """Execute agents sequentially."""
+        """Execute agents sequentially with timeout protection."""
         from galaxy.agents import agent_registry
 
         responses = {}
         current_query = query
+        timeout = self._get_agent_timeout()
 
         for agent_name in agents:
             try:
                 agent = agent_registry.get_agent(agent_name, self.deps)
-                response = await agent.process(current_query, context or {})
+                # Execute with timeout protection
+                response = await asyncio.wait_for(
+                    agent.process(current_query, context or {}),
+                    timeout=timeout
+                )
                 responses[agent_name] = response
 
                 # For sequential execution, next agent can see previous results
                 if len(responses) > 1:
                     current_query = f"{query}\n\nPrevious analysis: {response.content}"
 
+            except asyncio.TimeoutError:
+                log.error(f"Agent {agent_name} timed out after {timeout}s")
+                responses[agent_name] = AgentResponse(
+                    content=f"Agent {agent_name} timed out after {timeout} seconds",
+                    confidence="low",
+                    agent_type=agent_name,
+                    suggestions=[],
+                    metadata={"error": True, "timeout": True},
+                )
             except Exception as e:
                 log.error(f"Error executing agent {agent_name}: {e}")
                 responses[agent_name] = AgentResponse(
@@ -207,13 +205,29 @@ class WorkflowOrchestratorAgent(BaseGalaxyAgent):
     async def _execute_parallel(
         self, agents: List[str], query: str, context: Dict[str, Any] = None
     ) -> Dict[str, AgentResponse]:
-        """Execute agents in parallel."""
+        """Execute agents in parallel with timeout protection."""
         from galaxy.agents import agent_registry
+
+        timeout = self._get_agent_timeout()
 
         async def call_agent(agent_name: str):
             try:
                 agent = agent_registry.get_agent(agent_name, self.deps)
-                return agent_name, await agent.process(query, context or {})
+                # Execute with timeout protection
+                response = await asyncio.wait_for(
+                    agent.process(query, context or {}),
+                    timeout=timeout
+                )
+                return agent_name, response
+            except asyncio.TimeoutError:
+                log.error(f"Agent {agent_name} timed out after {timeout}s")
+                return agent_name, AgentResponse(
+                    content=f"Agent {agent_name} timed out after {timeout} seconds",
+                    confidence="low",
+                    agent_type=agent_name,
+                    suggestions=[],
+                    metadata={"error": True, "timeout": True},
+                )
             except Exception as e:
                 log.error(f"Error executing agent {agent_name}: {e}")
                 return agent_name, AgentResponse(
@@ -254,7 +268,7 @@ class WorkflowOrchestratorAgent(BaseGalaxyAgent):
         return """
         You coordinate multiple Galaxy agents. Determine which agents to call and in what order.
 
-        Available agents: error_analysis, tool_recommendation, gtn_training, custom_tool, data_analysis
+        Available agents: error_analysis, tool_recommendation, gtn_training, custom_tool
 
         Respond in this format:
         AGENTS: [agent1, agent2]

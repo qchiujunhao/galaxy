@@ -349,6 +349,7 @@
     <datatype extension="ome_zarr.zip" type="galaxy.datatypes.binary:CompressedOMEZarrZipArchive" display_in_upload="true">
         <converter file="archive_to_directory.xml" target_datatype="ome_zarr" />
     </datatype>
+    <datatype extension="spatialdata.zip" type="galaxy.datatypes.binary:SpatialData" mimetype="application/octet-stream" display_in_upload="true" description="A data framework that comprises a FAIR storage format and a collection of python libraries for performant access, alignment, and processing of uni- and multi-modal spatial omics datasets" description_url="https://github.com/scverse/spatialdata"/>
     <datatype extension="tar" auto_compressed_types="gz,bz2" type="galaxy.datatypes.binary:CompressedArchive" subclass="true" display_in_upload="true">
       <converter file="archive_to_directory.xml" target_datatype="directory"/>
     </datatype>
@@ -390,8 +391,8 @@
     <datatype extension="wiff.tar" type="galaxy.datatypes.binary:WiffTar" display_in_upload="true"/>
     <datatype extension="wiff2.tar" type="galaxy.datatypes.binary:Wiff2Tar" display_in_upload="true"/>
     <datatype extension="mascotxml" type="galaxy.datatypes.proteomics:MascotXML" mimetype="application/xml" display_in_upload="true"/>
-    <datatype extension="mztab" type="galaxy.datatypes.proteomics:MzTab" display_in_upload="true"/>
-    <datatype extension="mztab2" type="galaxy.datatypes.proteomics:MzTab2" display_in_upload="true"/>
+    <datatype extension="mztab" type="galaxy.datatypes.proteomics:MzTab" display_in_upload="true"  description="mzTab has been designed to act as a lightweight, tab-delimited file format for mass spec-derived omics data. This is the version 1.x originally designed for proteomics." description_url="https://github.com/HUPO-PSI/mzTab/"/>
+    <datatype extension="mztab2" type="galaxy.datatypes.proteomics:MzTab2" display_in_upload="true" description="mzTab-M is a lightweight, tab-delimited file format for reporting mass spectrometry-based metabolomics results. This is the version 2.x-M of mzTab format which is a refined version of version 1.x to take into account metabolomics aspects." description_url="https://github.com/HUPO-PSI/mzTab/" />
     <datatype extension="mzml" type="galaxy.datatypes.proteomics:MzML" mimetype="application/xml" display_in_upload="true">
         <infer_from suffix="mzml" />
     </datatype>
@@ -1194,7 +1195,6 @@
     <!-- rdeval types -->
     <datatype extension="rd" type="galaxy.datatypes.binary:Binary" mimetype="application/octet-stream" display_in_upload="true" subclass="true" description="Rdeval read sketch"/>
     <datatype extension="safetensors" type="galaxy.datatypes.binary:Safetensors" mimetype="application/octet-stream" display_in_upload="true" description="A simple format for storing tensors safely (as opposed to pickle) and that is still fast (zero-copy)" description_url="https://huggingface.co/docs/safetensors/index"/>
-    <datatype extension="spatialdata.zip" type="galaxy.datatypes.binary:SpatialData" mimetype="application/octet-stream" display_in_upload="true" description="A data framework that comprises a FAIR storage format and a collection of python libraries for performant access, alignment, and processing of uni- and multi-modal spatial omics datasets" description_url="https://github.com/scverse/spatialdata"/>
   </registration>
 
   <sniffers>

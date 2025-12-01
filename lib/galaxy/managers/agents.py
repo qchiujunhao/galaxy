@@ -113,10 +113,6 @@ class AgentService:
         try:
             log.info(f"Executing {agent_type} agent for query: '{query[:100]}...'")
             agent = agent_registry.get_agent(agent_type, deps)
-            # Temporarily disable DSPy agent execution path until the agent is fixed.
-            # if isinstance(agent, DataAnalysisDSPyAgent):
-            #     return await self._execute_data_analysis_dspy(agent, query, context or {})
-
             response = await agent.process(query, context)
 
             return {
