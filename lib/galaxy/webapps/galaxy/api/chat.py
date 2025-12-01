@@ -228,8 +228,9 @@ class ChatAPI:
             # Context from payload is a string (e.g., "tool_error"), convert to dict for agent system
             context_str = payload.context if hasattr(payload, "context") else None
             query_context = {"context_type": context_str} if context_str else {}
-            if getattr(payload, "dataset_ids", None):
-                dataset_ids = [str(ds_id) for ds_id in payload.dataset_ids or []]
+            raw_dataset_ids = getattr(payload, "dataset_ids", None) or getattr(payload, "selected_dataset_ids", None)
+            if raw_dataset_ids:
+                dataset_ids = [str(ds_id) for ds_id in raw_dataset_ids or []]
         elif query:
             # New format: query parameters (context not supported in this path)
             query_text = query
@@ -263,6 +264,7 @@ class ChatAPI:
         # Use new agent system if available, otherwise fallback to legacy
         try:
             if HAS_AGENTS and HAS_PYDANTIC_AI:
+                log.info("Chat query received agent=%s datasets=%s exchange_id=%s", agent_type, dataset_ids, exchange_id)
                 # Build context with conversation history
                 full_context = query_context.copy() if query_context else {}
                 if dataset_ids:
