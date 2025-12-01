@@ -82,6 +82,7 @@ class BaseGalaxyAgent(ABC):
     def __init__(self, deps: GalaxyAgentDependencies):
         """Initialize the agent with dependencies."""
         self.deps = deps
+        self.use_pydantic_agent = getattr(self, "USE_PYDANTIC_AGENT", True)
         # Convert PascalCase to snake_case: CustomToolAgent -> custom_tool_agent -> custom_tool
         # Handle acronyms: GTNTrainingAgent -> gtn_training_agent -> gtn_training
         class_name = self.__class__.__name__
@@ -89,12 +90,12 @@ class BaseGalaxyAgent(ABC):
         snake_case = re.sub(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "_", class_name).lower()
         self.agent_type = snake_case.replace("_agent", "").replace("agent", "")
 
-        if not HAS_PYDANTIC_AI:
+        if self.use_pydantic_agent and not HAS_PYDANTIC_AI:
             raise ImportError(
                 "pydantic-ai is required for agent functionality. " "Please install with: pip install pydantic-ai"
             )
 
-        self.agent = self._create_agent()
+        self.agent = self._create_agent() if self.use_pydantic_agent else None
 
     @abstractmethod
     def _create_agent(self) -> Agent:
@@ -207,6 +208,8 @@ class BaseGalaxyAgent(ABC):
 
     async def _run_with_retry(self, prompt: str, max_retries: int = 3, base_delay: float = 1.0):
         """Run the agent, with exponential backoff for retries."""
+        if not self.agent:
+            raise RuntimeError(f"{self.agent_type} agent does not use the pydantic runtime.")
         last_exception = None
 
         # Get model settings from config
