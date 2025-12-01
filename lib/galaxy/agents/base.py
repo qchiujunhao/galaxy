@@ -26,6 +26,7 @@ from galaxy.model import User
 from galaxy.schema.agents import (
     ActionSuggestion,
     ActionType,
+    AgentResponse,
     ConfidenceLevel,
 )
 
