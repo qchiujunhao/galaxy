@@ -13,8 +13,6 @@ import {
 import { FontAwesomeIcon } from "@fortawesome/vue-fontawesome";
 import { BSkeleton } from "bootstrap-vue";
 
-import { nextTick, onMounted, ref } from "vue";
-
 import { storeToRefs } from "pinia";
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 
@@ -40,7 +38,7 @@ import DatasetSelector from "./Form/Elements/FormData/FormData.vue";
 import LoadingSpan from "@/components/LoadingSpan.vue";
 
 library.add(faThumbsUp, faThumbsDown, faPaperPlane, faUser, faMagic, faHistory, faTrash, faClock);
-  
+
 interface AnalysisStep {
     type: "thought" | "action" | "observation" | "conclusion";
     content: string;
@@ -50,7 +48,7 @@ interface AnalysisStep {
     stderr?: string;
     success?: boolean;
 }
-  
+
 interface Message {
     id: string;
     role: "user" | "assistant";
@@ -1215,10 +1213,6 @@ async function submitQuery() {
         return;
     }
     pendingCollapsedMessages.length = 0;
-async function submitQuery() {
-    if (!query.value.trim()) {
-        return;
-    }
 
     const userMessage: Message = {
         id: generateId(),
