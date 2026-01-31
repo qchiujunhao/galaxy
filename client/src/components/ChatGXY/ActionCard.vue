@@ -92,4 +92,45 @@ function getIcon(actionType: ActionType): IconDefinition {
     flex-wrap: wrap;
     gap: 0.5rem;
 }
+
+.action-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.375rem 0.75rem;
+    font-size: 0.8rem;
+    border-radius: $border-radius-large;
+    transition: all 0.15s ease;
+    // Some Galaxy pages/themes apply inherited button colors that can make text
+    // effectively invisible until hover. Set explicit colors for the outlines.
+    color: $text-color;
+
+    &:hover:not(:disabled) {
+        transform: translateY(-1px);
+    }
+
+    &:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+}
+
+.action-button.btn-outline-primary {
+    color: $brand-primary;
+}
+
+.action-button.btn-outline-secondary {
+    color: $text-color;
+}
+
+.action-button:deep(svg) {
+    color: inherit;
+}
+
+.action-text {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
 </style>
