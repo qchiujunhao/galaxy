@@ -1812,6 +1812,9 @@ function popOutToScratchbook() {
                         v-for="item in chatHistory"
                         :key="item.id"
                         class="history-item"
+                        role="button"
+                        tabindex="0"
+                        @keydown.enter="() => loadPreviousChat(item)"
                         @click="() => loadPreviousChat(item)">
                         <div class="history-query">{{ item.query }}</div>
                         <div class="history-meta">
