@@ -84,20 +84,49 @@ function safeRenderMarkdown(content: unknown): string {
 </template>
 
 <style scoped lang="scss">
+.collapsed-history {
+    details {
+        border: 1px solid #dfe3e6;
+        border-radius: 8px;
+        background: #f7f8fa;
+        padding: 0.25rem 0.75rem;
+    }
+
+    summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: #1f2a37;
+        list-style: none;
+        cursor: pointer;
+        padding: 0.25rem 0;
+    }
+
+    summary::-webkit-details-marker {
+        display: none;
+    }
+
+    .chip-chevron {
+        transition: transform 0.2s ease;
+        display: inline-block;
+        margin-left: 0.5rem;
+
+        &.open {
+            transform: rotate(90deg);
+        }
+    }
+
+    .collapsed-entry-body {
+        background: #fff;
+    }
+}
+
 .intermediate-details {
     summary {
         cursor: pointer;
         font-weight: 600;
-    }
-}
-
-.chip-chevron {
-    transition: transform 0.2s ease;
-    display: inline-block;
-    margin-left: 0.5rem;
-
-    &.open {
-        transform: rotate(90deg);
     }
 }
 </style>

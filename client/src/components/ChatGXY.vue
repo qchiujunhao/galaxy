@@ -935,47 +935,9 @@ function normaliseArtifactList(raw: unknown): UploadedArtifact[] {
     return artifacts;
 }
 
-// Commented out unused functions for now
-
-// function normaliseGeneratedEntry(entry: string): string {
-//     return entry.replace(/^generated_file\//, "").replace(/^\/+/, "");
-// }
-
-// function findArtifactForEntry(entry: string, artifacts?: UploadedArtifact[]): UploadedArtifact | undefined {
-//     if (!artifacts || artifacts.length === 0) {
-//         return undefined;
-//     }
-//     const normalized = normaliseGeneratedEntry(entry);
-//     return artifacts.find((artifact) => {
-//         const artifactName = normaliseGeneratedEntry(artifact.name || "");
-//         return (
-//             artifactName === normalized ||
-//             artifactName === entry ||
-//             artifact.dataset_id === normalized ||
-//             artifact.dataset_id === entry
-//         );
-//     });
-// }
-
-// function artifactPreviewUrl(entry: string, artifacts?: UploadedArtifact[]): string | undefined {
-//     const match = findArtifactForEntry(entry, artifacts);
-//     return match?.download_url || undefined;
-// }
-
-// function artifactDownloadHandler(entry: string, artifacts?: UploadedArtifact[]) {
-//     const match = findArtifactForEntry(entry, artifacts);
-//     if (match) {
-//         downloadArtifact(match);
-//     }
-// }
-
 function formatGeneratedEntry(entry: string): string {
     return entry.replace(/^generated_file\//, "");
 }
-
-// function artifactIsDownloadable(entry: string, artifacts?: UploadedArtifact[]): boolean {
-//     return Boolean(findArtifactForEntry(entry, artifacts));
-// }
 
 function updateMessageOutputsFromArtifacts(message: Message, artifacts: UploadedArtifact[] | undefined) {
     if (!artifacts || artifacts.length === 0) {
@@ -1896,44 +1858,6 @@ function popOutToScratchbook() {
     overflow-y: auto;
     padding: 1rem 1.5rem;
     background: $white;
-}
-
-.collapsed-history {
-    details {
-        border: 1px solid #dfe3e6;
-        border-radius: 8px;
-        background: #f7f8fa;
-        padding: 0.25rem 0.75rem;
-    }
-
-    summary {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        font-size: 0.85rem;
-        font-weight: 600;
-        color: #1f2a37;
-        list-style: none;
-        cursor: pointer;
-        padding: 0.25rem 0;
-    }
-
-    summary::-webkit-details-marker {
-        display: none;
-    }
-
-    .chip-chevron {
-        margin-left: 0.75rem;
-        transition: transform 0.2s ease;
-
-        &.open {
-            transform: rotate(90deg);
-        }
-    }
-
-    .collapsed-entry-body {
-        background: #fff;
-    }
 }
 
 .pyodide-hint {
