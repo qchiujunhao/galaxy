@@ -9,7 +9,7 @@ import { GalaxyApi } from "@/api";
 import { getGalaxyInstance } from "@/app";
 
 import { getAgentIcon } from "./agentTypes";
-import type { ChatHistoryItem } from "./chatTypes";
+import type { ChatHistoryItem } from "./types";
 
 import LoadingSpan from "@/components/LoadingSpan.vue";
 import ActivityPanel from "@/components/Panels/ActivityPanel.vue";
