@@ -208,12 +208,20 @@ class ChatExecutionService:
             except Exception:
                 decode_guid = getattr(trans.security, "decode_guid", None)
                 if callable(decode_guid):
-                    try:
-                        recovered = decode_guid(dataset_id)
-                        decoded_id = trans.security.decode_id(recovered)
-                        dataset_id = recovered
-                    except Exception:
-                        decoded_id = None
+                    recovered = dataset_id
+                    for _ in range(3):
+                        try:
+                            recovered = decode_guid(recovered)
+                        except Exception:
+                            break
+                        if not recovered or recovered == dataset_id:
+                            break
+                        try:
+                            decoded_id = trans.security.decode_id(recovered)
+                            dataset_id = recovered
+                            break
+                        except Exception:
+                            decoded_id = None
                 if decoded_id is None:
                     log.warning("Failed to decode dataset id '%s' while building artifact collection", dataset_id)
                     continue

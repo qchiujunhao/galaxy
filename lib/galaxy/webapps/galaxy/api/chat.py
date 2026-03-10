@@ -767,18 +767,21 @@ class ChatAPI:
         if dataset_id:
             # Legacy recovery: older payloads could double-encode already-encoded ids.
             # Attempt to unwrap these so refreshed download URLs point at real datasets.
-            try:
-                trans.security.decode_id(dataset_id)
-            except Exception:
-                decode_guid = getattr(trans.security, "decode_guid", None)
-                if callable(decode_guid):
+            decode_guid = getattr(trans.security, "decode_guid", None)
+            if callable(decode_guid):
+                for _ in range(3):
                     try:
-                        recovered = decode_guid(dataset_id)
-                        if recovered:
-                            dataset_id = recovered
-                            entry["dataset_id"] = recovered
+                        trans.security.decode_id(dataset_id)
+                        break
                     except Exception:
-                        pass
+                        try:
+                            recovered = decode_guid(dataset_id)
+                        except Exception:
+                            break
+                        if not recovered or recovered == dataset_id:
+                            break
+                        dataset_id = recovered
+                        entry["dataset_id"] = recovered
             try:
                 entry["download_url"] = self.agent_service._dataset_download_url(trans, dataset_id)
             except Exception:  # pragma: no cover - best effort

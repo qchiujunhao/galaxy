@@ -2,7 +2,6 @@ import re
 from collections.abc import Callable
 from typing import (
     Annotated,
-    Any,
     get_args,
     get_origin,
     TYPE_CHECKING,
@@ -42,26 +41,7 @@ def validation_message_wrapper(callable: Callable):
 
 
 @validation_message_wrapper
-def encode_id(database_id: Any) -> str:
-    """Encode a decoded database id, or validate an already-encoded id string.
-
-    Many API payloads use encoded ids as strings. Pydantic validators for
-    `EncodedDatabaseIdField` historically re-encoded these strings, producing a
-    different value that could no longer be decoded back to an integer id.
-    """
-
-    if isinstance(database_id, str):
-        candidate = database_id.strip()
-        if not candidate:
-            raise ValueError("String required")
-        try:
-            return ensure_valid_id(candidate)
-        except Exception:
-            # Not an already-encoded id string; allow numeric strings to be encoded.
-            if candidate.isdigit():
-                return Security.security.encode_id(int(candidate))
-            raise ValueError("Invalid encoded id string")
-
+def encode_id(database_id: int) -> str:
     return Security.security.encode_id(database_id)
 
 
