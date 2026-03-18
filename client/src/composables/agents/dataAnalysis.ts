@@ -798,7 +798,11 @@ export function useDataAnalysisAgent(
             if (deliveredTaskId) {
                 deliveredTaskIds.add(deliveredTaskId);
             }
-            appendAssistantMessage(data, message.agentType || selectedAgentType.value);
+            populateAssistantMessage(message, data, message.agentType || selectedAgentType.value, {
+                skipDatasetUpdate: true,
+            });
+            attachPendingCollapsedMessages(message, { mergeOutputs: true });
+            maybeRunPyodideForMessage(message);
         }
     }
 
