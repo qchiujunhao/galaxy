@@ -2,20 +2,25 @@
 
 from __future__ import annotations
 
-from typing import Dict, List
-
 import re
+from typing import (
+    Dict,
+    List,
+)
 
-from sqlalchemy import and_, select
+from sqlalchemy import (
+    and_,
+    select,
+)
 
 from galaxy.managers.context import ProvidesUserContext
 from galaxy.model import HistoryDatasetAssociation
 
 
-
 def _normalize_reference(value: str) -> str:
-    value = value or ''
-    return re.sub(r'[^0-9A-Za-z_]+', '_', value.strip().lower())
+    value = value or ""
+    return re.sub(r"[^0-9A-Za-z_]+", "_", value.strip().lower())
+
 
 def resolve_dataset_reference(
     trans: ProvidesUserContext,
@@ -59,4 +64,3 @@ def resolve_dataset_reference(
 
         matches.append({"id": encoded_id, "name": name})
     return matches
-

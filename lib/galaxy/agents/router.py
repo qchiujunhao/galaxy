@@ -281,7 +281,6 @@ class QueryRouterAgent(BaseGalaxyAgent):
                     agent = DataAnalysisAgent(self.deps)
                     response = await agent.process(task, context or {})
                     # Annotate routing for debugging/telemetry; don't leak full prompt.
-                    response.metadata = dict(response.metadata or {})
                     response.metadata.setdefault("routed_by", "router")
                     response.metadata.setdefault("router_method", "output_function")
                     return response

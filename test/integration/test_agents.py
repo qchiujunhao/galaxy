@@ -165,10 +165,7 @@ class TestAgentsApiMocked(AgentIntegrationTestCase):
         assistant_messages = [msg for msg in history if msg.get("role") == "assistant"]
         assert assistant_messages
         assert any(
-            msg.get("agent_response", {}).get("metadata", {})
-            .get("execution", {})
-            .get("stdout")
-            == "analysis complete"
+            msg.get("agent_response", {}).get("metadata", {}).get("execution", {}).get("stdout") == "analysis complete"
             for msg in history
             if msg.get("role") == "assistant"
         )

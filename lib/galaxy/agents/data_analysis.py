@@ -15,10 +15,19 @@ import os
 import re
 import tempfile
 import uuid
-from datetime import datetime, timezone
+from datetime import (
+    datetime,
+    timezone,
+)
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import (
+    Any,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+)
 from urllib.parse import urlencode
 
 try:
@@ -26,11 +35,12 @@ try:
 
     HAS_ITSDANGEROUS = True
 except ImportError:  # pragma: no cover - optional dependency
-    URLSafeTimedSerializer = None  # type: ignore[assignment]
+    URLSafeTimedSerializer = None
     HAS_ITSDANGEROUS = False
 
 from galaxy import exceptions
 from galaxy.managers.hdas import HDAManager
+from galaxy.model import HistoryDatasetAssociation
 from galaxy.schema.fields import (
     DecodedDatabaseIdField,
     encode_id,
@@ -43,15 +53,14 @@ from .base import (
     ConfidenceLevel,
     GalaxyAgentDependencies,
 )
-from galaxy.model import HistoryDatasetAssociation
-
 from .dspy_adapter import (
+    build_context_text,
     DSPyPlanResult,
     GalaxyDSPyPlanner,
-    build_context_text,
 )
 
 log = logging.getLogger(__name__)
+
 
 class DataAnalysisAgent(BaseGalaxyAgent):
     """Agent orchestrating dataset analysis with generated code execution."""
@@ -84,10 +93,10 @@ class DataAnalysisAgent(BaseGalaxyAgent):
 
     # BaseGalaxyAgent requires these abstract methods, but the DSPy variant does
     # not use the pydantic runtime.
-    def _create_agent(self):  # type: ignore[override]
+    def _create_agent(self):
         raise RuntimeError("DataAnalysisAgent relies on DSPy CodeReact and does not expose a pydantic agent.")
 
-    def get_system_prompt(self) -> str:  # type: ignore[override]
+    def get_system_prompt(self) -> str:
         return (
             "You are Galaxy's data analysis agent. Generate Python that runs inside Galaxy's sandboxed execution environment."
             " Use the helper functions load_dataset('<alias>') to obtain a pandas DataFrame or get_dataset_path('<alias>') for filesystem paths."
@@ -95,7 +104,6 @@ class DataAnalysisAgent(BaseGalaxyAgent):
             " Save any artifacts to ``outputs_dir/generated_file/`` and immediately print a short summary plus the relative paths for every generated artifact so downstream reasoning can consume real observations."
             " Always return a valid JSON object in your final answer; avoid Python reprs or non-JSON constructs."
         )
-
 
     async def process(self, query: str, context: Optional[Dict[str, Any]] = None) -> AgentResponse:
         context = context or {}
@@ -244,7 +252,7 @@ class DataAnalysisAgent(BaseGalaxyAgent):
         should_execute = self._should_enqueue_execution(code, normalized_requirements, last_executed_task)
         if should_execute and code:
             if dataset_descriptors and self._dataset_token_signer is None:
-                metadata: Dict[str, Any] = {
+                error_metadata: Dict[str, Any] = {
                     "datasets_used": [str(entry.get("id")) for entry in dataset_descriptors if entry.get("id")]
                     or [encode_id(d) for d in datasets],
                     "planner": "dspy",
@@ -266,7 +274,7 @@ class DataAnalysisAgent(BaseGalaxyAgent):
                     confidence=ConfidenceLevel.LOW,
                     agent_type=self.agent_type,
                     suggestions=suggestions,
-                    metadata=metadata,
+                    metadata=error_metadata,
                 )
             pyodide_task = self._build_pyodide_task(code, normalized_requirements, dataset_descriptors, alias_map)
             log.info(
@@ -284,10 +292,12 @@ class DataAnalysisAgent(BaseGalaxyAgent):
                 normalized_requirements,
             )
             try:
-                refined_plan = self._planner.augment_with_execution(question, context_text, active_plan, execution_result)
+                refined_plan = self._planner.augment_with_execution(
+                    question, context_text, active_plan, execution_result
+                )
                 active_plan = refined_plan
             except Exception as exc:  # pragma: no cover - defensive path
-                log.debug('Planner refinement failed: %s', exc)
+                log.debug("Planner refinement failed: %s", exc)
             requirements = active_plan.requirements or requirements
             normalized_requirements = self._normalize_requirements(requirements)
 
@@ -320,7 +330,9 @@ class DataAnalysisAgent(BaseGalaxyAgent):
                     break
 
         if execution_result:
-            analysis_steps = self._merge_execution_steps(analysis_steps, code, normalized_requirements, execution_result)
+            analysis_steps = self._merge_execution_steps(
+                analysis_steps, code, normalized_requirements, execution_result
+            )
             analysis_steps = self._deduplicate_actions(analysis_steps)
         else:
             analysis_steps = self._deduplicate_actions(analysis_steps)
@@ -339,7 +351,7 @@ class DataAnalysisAgent(BaseGalaxyAgent):
         dataset_ids_used = [str(entry.get("id")) for entry in dataset_descriptors if entry.get("id")] or [
             encode_id(d) for d in datasets
         ]
-        metadata: Dict[str, Any] = {
+        response_metadata: Dict[str, Any] = {
             "datasets_used": dataset_ids_used,
             "summary": summary_text,
             "analysis_steps": analysis_steps,
@@ -357,17 +369,17 @@ class DataAnalysisAgent(BaseGalaxyAgent):
         }
 
         if pyodide_task:
-            metadata["pyodide_task"] = pyodide_task
-            metadata["pyodide_status"] = "pending"
-            metadata["pyodide_started_at"] = datetime.now(timezone.utc).isoformat()
-            metadata["pyodide_context"] = {
+            response_metadata["pyodide_task"] = pyodide_task
+            response_metadata["pyodide_status"] = "pending"
+            response_metadata["pyodide_started_at"] = datetime.now(timezone.utc).isoformat()
+            response_metadata["pyodide_context"] = {
                 "alias_map": alias_map,
                 "datasets": dataset_descriptors,
                 "requirements": normalized_requirements,
             }
-            metadata["is_complete"] = False
+            response_metadata["is_complete"] = False
         elif execution_result is not None:
-            metadata["execution"] = execution_result
+            response_metadata["execution"] = execution_result
             normalized_code = self._normalize_code(code) if code else ""
             metadata_code = normalized_code or (last_executed_task.get("code") if last_executed_task else "") or ""
             metadata_requirements = (
@@ -375,29 +387,29 @@ class DataAnalysisAgent(BaseGalaxyAgent):
                 if normalized_code
                 else (last_executed_task.get("requirements", []) if last_executed_task else normalized_requirements)
             )
-            metadata["executed_task"] = {
+            response_metadata["executed_task"] = {
                 "task_id": last_executed_task.get("task_id") if last_executed_task else None,
                 "code": metadata_code,
                 "requirements": metadata_requirements,
                 "datasets": dataset_descriptors,
                 "alias_map": alias_map,
             }
-            metadata["stdout"] = execution_result.get("stdout", "")
-            metadata["stderr"] = execution_result.get("stderr", "")
-            metadata["pyodide_status"] = "completed" if execution_result.get("success") else "error"
-            metadata["is_complete"] = execution_result.get("success")
-            metadata["pyodide_context"] = {
+            response_metadata["stdout"] = execution_result.get("stdout", "")
+            response_metadata["stderr"] = execution_result.get("stderr", "")
+            response_metadata["pyodide_status"] = "completed" if execution_result.get("success") else "error"
+            response_metadata["is_complete"] = execution_result.get("success")
+            response_metadata["pyodide_context"] = {
                 "alias_map": alias_map,
                 "datasets": dataset_descriptors,
                 "requirements": normalized_requirements,
             }
         else:
-            metadata["pyodide_status"] = "completed" if active_plan.is_complete else "pending"
-            metadata["is_complete"] = active_plan.is_complete
+            response_metadata["pyodide_status"] = "completed" if active_plan.is_complete else "pending"
+            response_metadata["is_complete"] = active_plan.is_complete
 
-        suggestions: List[ActionSuggestion] = []
+        response_suggestions: List[ActionSuggestion] = []
         if execution_result and not execution_result.get("success", False):
-            suggestions.append(
+            response_suggestions.append(
                 ActionSuggestion(
                     action_type=ActionType.REFINE_QUERY,
                     description="Adjust the request and try a different analysis approach.",
@@ -408,9 +420,9 @@ class DataAnalysisAgent(BaseGalaxyAgent):
             )
 
         follow_up_items = self._normalize_follow_up_items(active_plan.follow_up)
-        base_priority = len(suggestions) + 1
+        base_priority = len(response_suggestions) + 1
         for index, follow in enumerate(follow_up_items):
-            suggestions.append(
+            response_suggestions.append(
                 ActionSuggestion(
                     action_type=ActionType.REFINE_QUERY,
                     description=follow,
@@ -447,8 +459,8 @@ class DataAnalysisAgent(BaseGalaxyAgent):
             content=content,
             confidence=confidence,
             agent_type=self.agent_type,
-            suggestions=suggestions,
-            metadata=metadata,
+            suggestions=response_suggestions,
+            metadata=response_metadata,
         )
 
     def _determine_completion_state(self, plan: DSPyPlanResult, execution_result: Optional[Dict[str, Any]]) -> str:
@@ -638,7 +650,9 @@ class DataAnalysisAgent(BaseGalaxyAgent):
             "requirements": requirements,
         }
         if executed_task.get("alias_map"):
-            result["dataset_aliases"] = dict(executed_task.get("alias_map"))
+            task_alias_map = executed_task.get("alias_map")
+            if isinstance(task_alias_map, dict):
+                result["dataset_aliases"] = dict(task_alias_map)
         if executed_task.get("datasets"):
             result["datasets"] = executed_task.get("datasets")
         return result
@@ -712,7 +726,9 @@ class DataAnalysisAgent(BaseGalaxyAgent):
         mime_type, _ = mimetypes.guess_type(str(name))
         return mime_type
 
-    def _prepare_dataset_aliases(self, dataset_ids: List[DecodedDatabaseIdField]) -> tuple[Dict[str, str], List[Dict[str, Any]]]:
+    def _prepare_dataset_aliases(
+        self, dataset_ids: List[DecodedDatabaseIdField]
+    ) -> tuple[Dict[str, str], List[Dict[str, Any]]]:
         trans = getattr(self.deps, "trans", None)
         app = getattr(trans, "app", None)
         if not dataset_ids or not trans or not getattr(trans, "security", None) or not app:
@@ -730,27 +746,22 @@ class DataAnalysisAgent(BaseGalaxyAgent):
                 return {}, []
 
         alias_map: Dict[str, str] = {}
-        log.debug('Preparing dataset aliases', extra={'dataset_ids': dataset_ids})
+        log.debug("Preparing dataset aliases", extra={"dataset_ids": dataset_ids})
         metadata: List[Dict[str, Any]] = []
         used_aliases: set[str] = set()
 
         for index, dataset_id in enumerate(dataset_ids, start=1):
             decoded_id = dataset_id
-            dataset_alias_value = dataset_id
-            if isinstance(dataset_id, str):
-                dataset_alias_value = dataset_id.strip()
-                try:
-                    decoded_id = trans.security.decode_id(dataset_alias_value)
-                except Exception:
-                    log.warning("Skipping unknown dataset alias in context: %s", dataset_id)
-                    continue
+            dataset_alias_value = str(dataset_id)
             try:
                 hda = hda_manager.get_accessible(decoded_id, trans.user)
                 ensure_on_disk = getattr(hda_manager, "ensure_dataset_on_disk", None)
                 if callable(ensure_on_disk):
                     ensure_on_disk(trans, hda)
                 else:
-                    hda_manager.dataset_manager.ensure_dataset_on_disk(trans, hda)
+                    dataset_manager = getattr(hda_manager, "dataset_manager", None)
+                    if dataset_manager is not None:
+                        dataset_manager.ensure_dataset_on_disk(trans, hda)
             except exceptions.ItemAccessibilityException:
                 log.warning("Dataset %s is not accessible to the current user", dataset_id)
                 continue
@@ -790,8 +801,8 @@ class DataAnalysisAgent(BaseGalaxyAgent):
             alias_map[file_basename] = encoded_id
             alias_map[self._sanitize_alias(file_basename)] = encoded_id
             log.debug(
-                'prepared_dataset_entry',
-                extra={'id': dataset_id, 'encoded_id': encoded_id, 'aliases': unique_aliases, 'path': file_path},
+                "prepared_dataset_entry",
+                extra={"id": dataset_id, "encoded_id": encoded_id, "aliases": unique_aliases, "path": file_path},
             )
             metadata.append(
                 {
@@ -849,11 +860,7 @@ class DataAnalysisAgent(BaseGalaxyAgent):
                 content_normalized = self._normalize_code(step_copy.get("content", ""))
                 if content_normalized in seen_codes:
                     continue
-                if (
-                    not action_added
-                    and normalized_code
-                    and content_normalized == self._normalize_code(normalized_code)
-                ):
+                if not action_added and normalized_code and content_normalized == self._normalize_code(normalized_code):
                     step_copy["content"] = normalized_code
                     step_copy["requirements"] = requirements
                     step_copy["status"] = "completed" if execution_result.get("success") else "error"
@@ -899,9 +906,7 @@ class DataAnalysisAgent(BaseGalaxyAgent):
             "status": "completed" if success else "error",
         }
 
-    def _build_content_from_execution(
-        self, summary: Optional[str], execution_result: Dict[str, Any]
-    ) -> str:
+    def _build_content_from_execution(self, summary: Optional[str], execution_result: Dict[str, Any]) -> str:
         segments: List[str] = []
         summary_text = (summary or "").strip()
         if summary_text:
@@ -918,7 +923,11 @@ class DataAnalysisAgent(BaseGalaxyAgent):
                 segments.append(f"Execution error:\n{self._truncate_output(str(error_message))}")
 
         if not segments:
-            segments.append("Generated analysis code executed successfully." if execution_result.get("success") else "Generated analysis code failed.")
+            segments.append(
+                "Generated analysis code executed successfully."
+                if execution_result.get("success")
+                else "Generated analysis code failed."
+            )
 
         return "\n\n".join(segments).strip()
 
@@ -926,7 +935,7 @@ class DataAnalysisAgent(BaseGalaxyAgent):
         if not value:
             return ""
         sanitized = re.sub(r"[^0-9A-Za-z_]+", "_", value.strip())
-        sanitized = re.sub(r"_{2,}", "_", sanitized).strip('_')
+        sanitized = re.sub(r"_{2,}", "_", sanitized).strip("_")
         if sanitized and not sanitized[0].isalpha():
             sanitized = f"dataset_{sanitized}"
         return sanitized
@@ -952,7 +961,8 @@ class DataAnalysisAgent(BaseGalaxyAgent):
                 if (
                     deduped
                     and str(deduped[-1].get("type", "") or "").lower() == "observation"
-                    and self._normalize_code(deduped[-1].get("content", "")) == self._normalize_code(step.get("content", ""))
+                    and self._normalize_code(deduped[-1].get("content", ""))
+                    == self._normalize_code(step.get("content", ""))
                 ):
                     continue
                 deduped.append(step)
@@ -1098,7 +1108,6 @@ class DataAnalysisAgent(BaseGalaxyAgent):
 
         return steps
 
-
     @staticmethod
     @lru_cache(maxsize=1)
     def _load_example_snippets(path: Path) -> str:
@@ -1110,9 +1119,7 @@ class DataAnalysisAgent(BaseGalaxyAgent):
                     question = item.get("question")
                     answer = item.get("answer") or item.get("final_answer") or item.get("finalAnswer")
                     if question and answer:
-                        snippets.append(
-                            f"\n### Example\nQuestion: {question}\nAnswer: {answer}"
-                        )
+                        snippets.append(f"\n### Example\nQuestion: {question}\nAnswer: {answer}")
                 return "".join(snippets)
         except FileNotFoundError:
             log.debug("Examples file not found at %s", path)

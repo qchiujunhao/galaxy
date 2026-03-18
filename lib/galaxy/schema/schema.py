@@ -3883,8 +3883,7 @@ class ChatPayload(Model):
         default=None,
         title="Agent Type",
         description=(
-            "Optional agent type to use for this query. "
-            "When omitted, the server will default to automatic routing."
+            "Optional agent type to use for this query. " "When omitted, the server will default to automatic routing."
         ),
     )
     context: Optional[str] = Field(

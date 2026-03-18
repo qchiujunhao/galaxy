@@ -5,6 +5,8 @@ This module provides AI agent functionality built on pydantic-ai for Galaxy.
 Agents provide specialized assistance for workflows, tool errors, data quality, and more.
 """
 
+from typing import Any
+
 from .base import (
     AgentType,
     BaseGalaxyAgent,
@@ -16,10 +18,14 @@ from .orchestrator import WorkflowOrchestratorAgent
 from .registry import AgentRegistry
 from .router import QueryRouterAgent
 from .tools import ToolRecommendationAgent
+
+ImportedDataAnalysisAgent: Any
 try:
-    from .data_analysis import DataAnalysisAgent
+    from .data_analysis import DataAnalysisAgent as ImportedDataAnalysisAgent
 except ImportError:  # pragma: no cover - optional dependency (e.g. itsdangerous)
-    DataAnalysisAgent = None  # type: ignore[assignment]
+    ImportedDataAnalysisAgent = None
+
+DataAnalysisAgent: Any = ImportedDataAnalysisAgent
 
 __all__ = [
     "AgentType",
@@ -45,3 +51,4 @@ agent_registry.register(AgentType.ORCHESTRATOR, WorkflowOrchestratorAgent)
 agent_registry.register(AgentType.TOOL_RECOMMENDATION, ToolRecommendationAgent)
 if DataAnalysisAgent is not None:
     agent_registry.register(AgentType.DATA_ANALYSIS, DataAnalysisAgent)
+from typing import Optional

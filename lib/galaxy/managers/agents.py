@@ -11,12 +11,16 @@ from typing import (
 from urllib.parse import urlencode
 
 try:
-    from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+    from itsdangerous import (
+        BadSignature,
+        SignatureExpired,
+        URLSafeTimedSerializer,
+    )
 
     HAS_ITSDANGEROUS = True
 except ImportError:  # pragma: no cover - optional dependency guard
     HAS_ITSDANGEROUS = False
-    URLSafeTimedSerializer = None  # type: ignore[assignment]
+    URLSafeTimedSerializer = None
 
 from galaxy.config import GalaxyAppConfiguration
 from galaxy.exceptions import ConfigurationError
@@ -121,7 +125,7 @@ class AgentService:
             # Fallback to router for unknown agents - it handles general queries
             router = QueryRouterAgent(deps)
             response = await router.process(query, context)
-            metadata = response.metadata.copy()
+            metadata = response.metadata.model_dump()
             metadata["fallback"] = True
             metadata["original_agent_type"] = agent_type
             return AgentResponse(

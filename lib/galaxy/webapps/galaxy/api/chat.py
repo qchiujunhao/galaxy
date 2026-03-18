@@ -5,8 +5,11 @@ import json
 import logging
 import mimetypes
 import os
-from datetime import datetime, timezone
 import time
+from datetime import (
+    datetime,
+    timezone,
+)
 from typing import (
     Annotated,
     Any,
@@ -21,27 +24,32 @@ from fastapi import (
     HTTPException,
     Path,
     Query,
+    status,
     UploadFile,
     WebSocket,
     WebSocketDisconnect,
-    status,
 )
 from pydantic import Field
-
 from starlette.responses import StreamingResponse
 
 from galaxy.config import GalaxyAppConfiguration
 from galaxy.exceptions import ConfigurationError
 from galaxy.managers.agents import AgentService
-from galaxy.managers.chat_execution import ChatExecutionService
 from galaxy.managers.chat import ChatManager
+from galaxy.managers.chat_execution import ChatExecutionService
 from galaxy.managers.context import (
     ProvidesHistoryContext,
-    ProvidesUserContext
+    ProvidesUserContext,
 )
 from galaxy.managers.jobs import JobManager
-from galaxy.model import HistoryDatasetAssociation, User
-from galaxy.schema.agents import AgentResponse, UploadedArtifact
+from galaxy.model import (
+    HistoryDatasetAssociation,
+    User,
+)
+from galaxy.schema.agents import (
+    AgentResponse,
+    UploadedArtifact,
+)
 from galaxy.schema.fields import (
     DecodedDatabaseIdField,
     encode_id,
@@ -115,7 +123,6 @@ def _guess_extension(filename: Optional[str], mime_type: Optional[str]) -> str:
     return "data"
 
 
-
 ACTIVE_EXECUTION_STREAMS: dict[int, set[WebSocket]] = {}
 STREAM_LOCK = asyncio.Lock()
 
@@ -153,7 +160,6 @@ async def _broadcast_exec_followup(exchange_id: int, message: dict[str, Any]) ->
                     connections.discard(ws)
                 if not connections:
                     ACTIVE_EXECUTION_STREAMS.pop(exchange_id, None)
-
 
 
 @router.cbv
@@ -216,8 +222,8 @@ class ChatAPI:
         # The UI posts `agent_type` in the request body; keep the query parameter for
         # backwards compatibility but prefer the body value when present.
         effective_agent_type = (
-            (payload.agent_type.strip() if payload and isinstance(payload.agent_type, str) else "") or agent_type
-        )
+            payload.agent_type.strip() if payload and isinstance(payload.agent_type, str) else ""
+        ) or agent_type
 
         # Determine query source - either from payload (job-based) or query param (general)
         regenerate = False
@@ -326,7 +332,9 @@ class ChatAPI:
                         "response": result.get("response", ""),
                         "agent_response": agent_resp.model_dump() if agent_resp else None,
                     }
-                    exchange = self.chat_manager.create_general_chat(trans, query_text, storable_result, effective_agent_type)
+                    exchange = self.chat_manager.create_general_chat(
+                        trans, query_text, storable_result, effective_agent_type
+                    )
                     result["exchange_id"] = exchange.id
 
             result["processing_time"] = time.time() - start_time
@@ -583,7 +591,7 @@ class ChatAPI:
             display_name = hda.display_name()
         except Exception:
             display_name = hda.name or dataset_id
-        safe_name = (display_name or dataset_id).replace('\\', '').replace('"', '')
+        safe_name = (display_name or dataset_id).replace("\\", "").replace('"', "")
         headers = {
             "Content-Disposition": f'attachment; filename="{safe_name}"',
             "Content-Length": str(os.path.getsize(file_path)),
@@ -693,7 +701,6 @@ class ChatAPI:
             download_url=download_url,
         )
 
-
     @router.websocket("/api/chat/exchange/{exchange_id}/stream")
     async def chat_exchange_stream(
         self,
@@ -714,7 +721,6 @@ class ChatAPI:
             pass
         finally:
             await _remove_stream(exchange_id, websocket)
-
 
     @router.post("/api/chat/exchange/{exchange_id}/pyodide_result")
     async def submit_pyodide_result(
@@ -824,8 +830,6 @@ class ChatAPI:
             return None
 
     def _ensure_pyodide_completion_state(self, metadata: dict[str, Any]) -> None:
-        if not isinstance(metadata, dict):
-            return
         status = metadata.get("pyodide_status")
         if status in ("completed", "error", "timeout"):
             return
@@ -915,7 +919,7 @@ class ChatAPI:
         self,
         query: str,
         agent_type: str,
-        trans: ProvidesHistoryContext,
+        trans: ProvidesUserContext,
         user: User,
         job=None,
         context: Optional[dict[str, Any]] = None,

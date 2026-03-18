@@ -8,7 +8,12 @@ Galaxy runtime dependencies.
 from __future__ import annotations
 
 import ast
-from typing import Any, Iterable, Optional, Set
+from typing import (
+    Any,
+    Iterable,
+    Optional,
+    Set,
+)
 
 _REQUIREMENTS_MARKER = "# requirements:"
 
@@ -200,7 +205,8 @@ def merge_execution_metadata(
         executed_task.update(metadata.get("executed_task") or {})
 
     pyodide_task = metadata.get("pyodide_task")
-    pyodide_context = metadata.get("pyodide_context") if isinstance(metadata.get("pyodide_context"), dict) else {}
+    raw_pyodide_context = metadata.get("pyodide_context")
+    pyodide_context: dict[str, Any] = raw_pyodide_context if isinstance(raw_pyodide_context, dict) else {}
 
     if isinstance(pyodide_task, dict):
         executed_task.setdefault("code", pyodide_task.get("original_code") or pyodide_task.get("code"))
@@ -240,8 +246,6 @@ def merge_execution_metadata(
             inferred_plots: list[str] = list(existing_plots) if isinstance(existing_plots, list) else []
             inferred_files: list[str] = list(existing_files) if isinstance(existing_files, list) else []
             for artifact in artifacts:
-                if not isinstance(artifact, dict):
-                    continue
                 name = artifact.get("name") or artifact.get("path") or artifact.get("dataset_id") or ""
                 if not isinstance(name, str) or not name:
                     continue

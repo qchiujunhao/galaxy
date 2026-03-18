@@ -5,10 +5,20 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import (
+    dataclass,
+    field,
+)
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, ClassVar
+from typing import (
+    Any,
+    ClassVar,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+)
 
 from galaxy.managers.context import ProvidesUserContext
 from galaxy.schema.agents import (
@@ -26,16 +36,17 @@ DSPY_IMPORT_ERROR: Optional[Exception] = None
 
 try:  # Optional dependency
     import dspy
+
     try:
         from dspy.teleprompt import BootstrapFewShot
     except ImportError:  # pragma: no cover - optional component
-        BootstrapFewShot = None  # type: ignore[assignment]
+        BootstrapFewShot = None
 
     HAS_DSPY = True
 except ImportError as exc:  # pragma: no cover - DSPy is optional
     HAS_DSPY = False
-    dspy = None  # type: ignore[assignment]
-    BootstrapFewShot = None  # type: ignore[assignment]
+    dspy = None
+    BootstrapFewShot = None
     DSPY_IMPORT_ERROR = exc
 
 log = logging.getLogger(__name__)
@@ -51,13 +62,9 @@ if HAS_DSPY:
     class DataAnalysisSignature(dspy.Signature):
         """Minimal DSPy signature used for Galaxy's data analysis agent."""
 
-        context = dspy.InputField(
-            desc="Conversation context, dataset metadata, and execution history."
-        )
+        context = dspy.InputField(desc="Conversation context, dataset metadata, and execution history.")
         question = dspy.InputField(desc="The user's data analysis request.")
-        answer = dspy.OutputField(
-            desc="JSON string with 'explanation', 'plots', 'files', 'next_steps_suggestion'."
-        )
+        answer = dspy.OutputField(desc="JSON string with 'explanation', 'plots', 'files', 'next_steps_suggestion'.")
 
     def load_examples_from_json(json_file_path: Path) -> List[dspy.Example]:
         examples: List[dspy.Example] = []
@@ -66,32 +73,32 @@ if HAS_DSPY:
             return examples
 
         try:
-            with json_file_path.open('r', encoding='utf-8') as handle:
+            with json_file_path.open("r", encoding="utf-8") as handle:
                 data = json.load(handle)
         except Exception as exc:
             log.warning("Failed to load examples from %s: %s", json_file_path, exc)
             return examples
 
         for item in data:
-            answer_payload = item.get('answer') or item.get('final_answer') or item.get('finalAnswer')
+            answer_payload = item.get("answer") or item.get("final_answer") or item.get("finalAnswer")
             example = dspy.Example(
-                question=item.get('question'),
-                context=item.get('context'),
-                rationale=item.get('rationale'),
+                question=item.get("question"),
+                context=item.get("context"),
+                rationale=item.get("rationale"),
                 answer=answer_payload,
-            ).with_inputs('question', 'context')
+            ).with_inputs("question", "context")
             examples.append(example)
         return examples
 
     def validation_metric(example: dspy.Example, prediction: dspy.Prediction, trace=None) -> bool:
         try:
-            payload = json.loads(prediction.answer) if hasattr(prediction, 'answer') else {}
+            payload = json.loads(prediction.answer) if hasattr(prediction, "answer") else {}
         except Exception:
             return False
 
-        explanation = payload.get('explanation')
-        plots = payload.get('plots')
-        files = payload.get('files')
+        explanation = payload.get("explanation")
+        plots = payload.get("plots")
+        files = payload.get("files")
         return bool(explanation) and isinstance(plots, list) and isinstance(files, list)
 
     CODE_REACT_CLS = getattr(dspy, "CodeReact", None)
@@ -127,7 +134,6 @@ if HAS_DSPY:
         def last_code(self) -> str:
             return self._captured[-1] if self._captured else ""
 
-
     class DatasetLookupTool(dspy.Tool):
         """LLM-accessible tool for resolving Galaxy dataset references."""
 
@@ -158,14 +164,11 @@ if HAS_DSPY:
         def __call__(self, reference: str) -> str:
             return self._tool_impl(reference)
 
-
     class GalaxyDataAnalysisModule(dspy.Module):  # pragma: no cover - immediate wrapper
         def __init__(self, tools: List[dspy.Tool], max_iters: int = 5):
             super().__init__()
             if CODE_REACT_CLS is None:
-                log.warning(
-                    "DSPy CodeReact not available; falling back to ReAct module for data analysis agent."
-                )
+                log.warning("DSPy CodeReact not available; falling back to ReAct module for data analysis agent.")
             self.react_agent = REACT_CLASS(
                 DataAnalysisSignature,
                 tools=tools,
@@ -191,7 +194,7 @@ if HAS_DSPY:
 
                 def __getitem__(self, key):
                     if key not in self:
-                        available = ', '.join(sorted(self.keys()))
+                        available = ", ".join(sorted(self.keys()))
                         if logger:
                             logger.warning(
                                 "ReAct emitted unknown tool '%s'; returning error observation. Available tools: %s",
@@ -201,15 +204,17 @@ if HAS_DSPY:
                         from dspy import Tool  # local import to avoid circular issues
 
                         def _invalid_tool(**kwargs):
-                            return json.dumps({
-                                'status': 'error',
-                                'message': f"Invalid tool '{key}'. Available tools: {available}",
-                            })
+                            return json.dumps(
+                                {
+                                    "status": "error",
+                                    "message": f"Invalid tool '{key}'. Available tools: {available}",
+                                }
+                            )
 
                         return Tool(
                             func=_invalid_tool,
-                            name=f'invalid_{key}',
-                            desc='Fallback handler for unexpected tool names emitted by the planner.',
+                            name=f"invalid_{key}",
+                            desc="Fallback handler for unexpected tool names emitted by the planner.",
                         )
                     return super().__getitem__(key)
 
@@ -457,7 +462,14 @@ class GalaxyDSPyPlanner:
                 steps.append(AnalysisStep(type=AnalysisStepType.THOUGHT, content=summary_clean))
             code_clean = (code or "").strip()
             if code_clean:
-                steps.append(AnalysisStep(type=AnalysisStepType.ACTION, content=code_clean, requirements=requirements, status=AnalysisStepStatus.PENDING))
+                steps.append(
+                    AnalysisStep(
+                        type=AnalysisStepType.ACTION,
+                        content=code_clean,
+                        requirements=requirements,
+                        status=AnalysisStepStatus.PENDING,
+                    )
+                )
 
         return steps
 
@@ -483,10 +495,10 @@ class GalaxyDSPyPlanner:
         module = GalaxyDataAnalysisModule([code_tool, dataset_tool], max_iters=0)
 
         observation_payload = {
-            'success': execution_result.get('success'),
-            'stdout': execution_result.get('stdout'),
-            'stderr': execution_result.get('stderr'),
-            'artifacts': [artifact.get('name') for artifact in execution_result.get('artifacts', [])],
+            "success": execution_result.get("success"),
+            "stdout": execution_result.get("stdout"),
+            "stderr": execution_result.get("stderr"),
+            "artifacts": [artifact.get("name") for artifact in execution_result.get("artifacts", [])],
         }
         execution_block = json.dumps(observation_payload, ensure_ascii=True)
         refined_context = (
@@ -503,22 +515,22 @@ class GalaxyDSPyPlanner:
         try:
             result = module(question=question, context=refined_context)
         except Exception as exc:  # pragma: no cover - DSPy runtime path
-            log.exception('DSPy module execution failed during refinement')
+            log.exception("DSPy module execution failed during refinement")
             raise RuntimeError(f"DSPy refinement failed: {exc}") from exc
 
-        answer_text = getattr(result, 'answer', None) or ''
+        answer_text = getattr(result, "answer", None) or ""
         try:
             answer_data = json.loads(answer_text) if answer_text else {}
         except json.JSONDecodeError:
-            answer_data = {'explanation': answer_text}
+            answer_data = {"explanation": answer_text}
 
-        trajectory = getattr(result, 'trajectory', {}) or {}
-        finish_called = any(value == 'finish' for key, value in trajectory.items() if key.startswith('tool_name_'))
+        trajectory = getattr(result, "trajectory", {}) or {}
+        finish_called = any(value == "finish" for key, value in trajectory.items() if key.startswith("tool_name_"))
 
-        summary = (answer_data.get('explanation') or plan.summary or '').strip()
-        follow_up = list(answer_data.get('next_steps_suggestion') or []) or plan.follow_up
-        plots = list(answer_data.get('plots') or []) or plan.plots
-        files = list(answer_data.get('files') or []) or plan.files
+        summary = (answer_data.get("explanation") or plan.summary or "").strip()
+        follow_up = list(answer_data.get("next_steps_suggestion") or []) or plan.follow_up
+        plots = list(answer_data.get("plots") or []) or plan.plots
+        files = list(answer_data.get("files") or []) or plan.files
         requirements = plan.requirements
         analysis_steps = self._build_analysis_steps(
             trajectory,
@@ -526,7 +538,7 @@ class GalaxyDSPyPlanner:
             plan.python_code,
             requirements,
             finish_called,
-            code_tool_name=getattr(code_tool, 'name', 'python_code_executor'),
+            code_tool_name=getattr(code_tool, "name", "python_code_executor"),
         )
 
         return DSPyPlanResult(
@@ -583,6 +595,8 @@ class GalaxyDSPyPlanner:
         except Exception as exc:  # pragma: no cover - file parse path
             log.debug("Unable to load DSPy examples: %s", exc)
             return []
+
+
 def build_context_text(
     question: str,
     datasets: Iterable[DecodedDatabaseIdField],
@@ -592,7 +606,7 @@ def build_context_text(
 ) -> str:
     dataset_lines = (
         "\n".join(
-            f"- Dataset {index + 1} (ID: {encode_id(dataset_id)}) — use load_dataset(\"{encode_id(dataset_id)}\") or get_dataset_path(\"{encode_id(dataset_id)}\") (dataset_{index + 1} and other aliases are also available)"
+            f'- Dataset {index + 1} (ID: {encode_id(dataset_id)}) — use load_dataset("{encode_id(dataset_id)}") or get_dataset_path("{encode_id(dataset_id)}") (dataset_{index + 1} and other aliases are also available)'
             for index, dataset_id in enumerate(datasets)
         )
         or "- None"

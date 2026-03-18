@@ -22,7 +22,7 @@ from galaxy.model import User
 from galaxy.schema.agents import (  # TODO: We need to deal with this now, given I typed metadata fully
     ActionSuggestion,
     ActionType,
-    AgentResponse,
+    AgentResponse as SchemaAgentResponse,
     ConfidenceLevel,
 )
 
@@ -64,6 +64,8 @@ except ImportError:
     GoogleProvider = None  # type: ignore[assignment,misc]
 
 log = logging.getLogger(__name__)
+
+AgentResponse = SchemaAgentResponse
 
 # Re-export common types for convenience
 __all__ = [
@@ -191,32 +193,6 @@ class AgentType:
     DATA_ANALYSIS = "data_analysis"
 
 
-# Internal agent response model (simplified for internal use)
-# For API responses, use galaxy.schema.agents.AgentResponse
-class AgentResponse:
-    """Internal agent response structure."""
-
-    def __init__(
-        self,
-        content: str,
-        confidence: Union[str, ConfidenceLevel],
-        agent_type: str,
-        suggestions: Optional[list[ActionSuggestion]] = None,
-        metadata: Optional[dict[str, Any]] = None,
-        reasoning: Optional[str] = None,
-    ):
-        self.content = content
-        # Normalize confidence to ConfidenceLevel enum
-        if isinstance(confidence, ConfidenceLevel):
-            self.confidence = confidence
-        else:
-            self.confidence = ConfidenceLevel(confidence.lower())
-        self.agent_type = agent_type
-        self.suggestions = suggestions or []
-        self.metadata = metadata or {}
-        self.reasoning = reasoning
-
-
 @dataclass
 class GalaxyAgentDependencies:
     """Dependencies passed to Galaxy agents via dependency injection."""
@@ -302,7 +278,7 @@ class BaseGalaxyAgent(ABC):
 
         return None
 
-    async def process(self, query: str, context: Optional[dict[str, Any]] = None) -> AgentResponse:
+    async def process(self, query: str, context: Optional[dict[str, Any]] = None) -> SchemaAgentResponse:
         """
         Process a query and return structured response.
 
@@ -316,7 +292,7 @@ class BaseGalaxyAgent(ABC):
         # Validate input
         validation_error = self._validate_query(query)
         if validation_error:
-            return AgentResponse(
+            return SchemaAgentResponse(
                 content=validation_error,
                 confidence=ConfidenceLevel.LOW,
                 agent_type=self.agent_type,
@@ -358,6 +334,8 @@ class BaseGalaxyAgent(ABC):
 
         for attempt in range(max_retries + 1):
             try:
+                if self.agent is None:
+                    raise RuntimeError(f"{self.agent_type} agent is not configured for pydantic-ai execution")
                 return await self.agent.run(prompt, deps=self.deps, model_settings=model_settings)
 
             except Exception as e:
@@ -411,7 +389,7 @@ class BaseGalaxyAgent(ABC):
 
         return "\n".join(prompt_parts)
 
-    def _format_response(self, result: Any, query: str, context: dict[str, Any]) -> AgentResponse:
+    def _format_response(self, result: Any, query: str, context: dict[str, Any]) -> SchemaAgentResponse:
         """Convert pydantic-ai result to AgentResponse."""
         # Default implementation - subclasses can override
         content = extract_result_content(result)
@@ -425,7 +403,7 @@ class BaseGalaxyAgent(ABC):
             agent_data={"has_context": bool(context)} if context else None,
         )
 
-    def _get_fallback_response(self, query: str, error_msg: str) -> AgentResponse:
+    def _get_fallback_response(self, query: str, error_msg: str) -> SchemaAgentResponse:
         """Return a fallback response when agent processing fails."""
         # Check for common service connectivity issues to provide a better message.
         is_service_error = any(
@@ -528,13 +506,13 @@ class BaseGalaxyAgent(ABC):
         fallback: bool = False,
         error: Optional[str] = None,
         reasoning: Optional[str] = None,
-    ) -> AgentResponse:
+    ) -> SchemaAgentResponse:
         """
         Build an AgentResponse with metadata filled in.
 
         Convenience wrapper around _build_metadata + AgentResponse construction.
         """
-        return AgentResponse(
+        return SchemaAgentResponse(
             content=content,
             confidence=confidence,
             agent_type=self.agent_type,
