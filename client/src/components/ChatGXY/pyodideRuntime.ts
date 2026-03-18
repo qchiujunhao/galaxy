@@ -82,6 +82,7 @@ let loadedPackages = new Set<string>();
 let stdoutBuffer = "";
 let stderrBuffer = "";
 let currentTaskId = "";
+let loadPyodideFn: ((options: Record<string, unknown>) => Promise<any>) | null = null;
 
 export function createWorkerErrorPayload(id: string, err: unknown): PyodideErrorMessage {
     const errorMessage = err instanceof Error ? err.message : String(err);
@@ -150,15 +151,16 @@ async function ensurePyodide(indexURL?: string): Promise<any> {
     if (!pyodidePromise || targetUrl !== currentIndexUrl) {
         currentIndexUrl = targetUrl;
         pyodidePromise = (async () => {
-            if (!(self as any).loadPyodide) {
-                self.importScripts(`${targetUrl}/pyodide.js`);
-            } else if (targetUrl !== DEFAULT_INDEX_URL) {
-                self.importScripts(`${targetUrl}/pyodide.js`);
+            if (!loadPyodideFn) {
+                const pyodideModule = (await import(/* @vite-ignore */ `${targetUrl}/pyodide.mjs`)) as {
+                    loadPyodide: (options: Record<string, unknown>) => Promise<any>;
+                };
+                loadPyodideFn = pyodideModule.loadPyodide;
             }
             stdoutBuffer = "";
             stderrBuffer = "";
             loadedPackages = new Set<string>();
-            const instance = await (self as any).loadPyodide({
+            const instance = await loadPyodideFn({
                 indexURL: targetUrl,
                 stdout: handleStdout,
                 stderr: handleStderr,
