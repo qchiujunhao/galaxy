@@ -506,14 +506,21 @@ export function useDataAnalysisAgent(
                 const uploadedArtifacts: UploadedArtifact[] = await uploadArtifacts(result.artifacts || []);
                 state.artifacts = uploadedArtifacts;
                 updateMessageOutputsFromArtifacts(message, uploadedArtifacts);
-                await submitPyodideExecutionResult(runnerTask, message, result, uploadedArtifacts);
-                applyExecutionResultMetadata(message, {
-                    success: result.success,
-                    stdout: result.stdout,
-                    stderr: result.stderr,
-                    artifacts: serializeUploadedArtifacts(uploadedArtifacts),
-                    task_id: runnerTask.task_id,
-                });
+                const appliedServerResponse = await submitPyodideExecutionResult(
+                    runnerTask,
+                    message,
+                    result,
+                    uploadedArtifacts,
+                );
+                if (!appliedServerResponse) {
+                    applyExecutionResultMetadata(message, {
+                        success: result.success,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                        artifacts: serializeUploadedArtifacts(uploadedArtifacts),
+                        task_id: runnerTask.task_id,
+                    });
+                }
                 state.status = result.success ? "completed" : "error";
                 if (!result.success && result.error) {
                     state.errorMessage = result.error;
@@ -764,7 +771,7 @@ export function useDataAnalysisAgent(
         message: ChatMessage,
         result: PyodideRunResult,
         artifacts: UploadedArtifact[],
-    ) {
+    ): Promise<boolean> {
         if (!currentChatId.value) {
             throw new Error("No active chat to submit execution results.");
         }
@@ -803,7 +810,9 @@ export function useDataAnalysisAgent(
             });
             attachPendingCollapsedMessages(message, { mergeOutputs: true });
             maybeRunPyodideForMessage(message);
+            return Boolean(data.agent_response);
         }
+        return false;
     }
 
     function ensurePendingPyodideTasks() {
