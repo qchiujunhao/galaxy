@@ -381,20 +381,8 @@ async function fetchConversation(exchangeId: string): Promise<boolean> {
     applyDatasetSelectionFromMessages(fullConversation);
     assistantMessagesToReplay.forEach((assistantMessage) => maybeRunPyodideForMessage(assistantMessage));
     if (pendingCollapsedMessages.length) {
-        const trailingMessages = pendingCollapsedMessages.splice(0);
-        const visibleMessage = trailingMessages.pop();
-        if (visibleMessage) {
-            if (trailingMessages.length) {
-                visibleMessage.collapsedHistory = trailingMessages.map((msg) => {
-                    msg.isCollapsed = true;
-                    return msg;
-                });
-                if (visibleMessage.isCollapsed === undefined) {
-                    visibleMessage.isCollapsed = true;
-                }
-            }
-            messages.value.push(visibleMessage);
-        }
+        pendingCollapsedMessages.forEach((msg) => messages.value.push(msg));
+        pendingCollapsedMessages.length = 0;
     }
 
     currentChatId.value = exchangeId;

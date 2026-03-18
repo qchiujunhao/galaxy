@@ -99,7 +99,9 @@ export function useDataAnalysisAgent(
         const existingMessage = findMessageForPayload(payload);
         if (existingMessage) {
             populateAssistantMessage(existingMessage, payload, fallbackAgentType, { skipDatasetUpdate: true });
-            attachPendingCollapsedMessages(existingMessage, { mergeOutputs: true });
+            if (!existingMessage.isCollapsible) {
+                attachPendingCollapsedMessages(existingMessage);
+            }
             maybeRunPyodideForMessage(existingMessage);
             return existingMessage;
         }
@@ -121,7 +123,7 @@ export function useDataAnalysisAgent(
             return assistantMessage;
         }
 
-        attachPendingCollapsedMessages(assistantMessage, { mergeOutputs: true });
+        attachPendingCollapsedMessages(assistantMessage);
         messages.value.push(assistantMessage);
 
         if (payload?.exchange_id) {
@@ -186,7 +188,7 @@ export function useDataAnalysisAgent(
         applyCollapseState(message);
     }
 
-    function attachPendingCollapsedMessages(target: ChatMessage, options?: { mergeOutputs?: boolean }) {
+    function attachPendingCollapsedMessages(target: ChatMessage) {
         if (!pendingCollapsedMessages.length) {
             return;
         }
@@ -194,21 +196,19 @@ export function useDataAnalysisAgent(
             msg.isCollapsed = true;
             return msg;
         });
-        if (options?.mergeOutputs) {
-            let mergedPlots = target.generatedPlots ? [...target.generatedPlots] : [];
-            let mergedFiles = target.generatedFiles ? [...target.generatedFiles] : [];
-            let mergedArtifacts = target.artifacts ? [...target.artifacts] : [];
-            for (let i = pendingCollapsedMessages.length - 1; i >= 0; i -= 1) {
-                const msg = pendingCollapsedMessages[i];
-                if (msg) {
-                    mergedPlots = mergePathEntries(mergedPlots, msg.generatedPlots);
-                    mergedFiles = mergePathEntries(mergedFiles, msg.generatedFiles);
-                    mergedArtifacts = mergeUploadedArtifacts(mergedArtifacts, msg.artifacts);
+        for (let i = pendingCollapsedMessages.length - 1; i >= 0; i -= 1) {
+            const msg = pendingCollapsedMessages[i];
+            if (msg) {
+                if (!target.generatedPlots?.length && msg.generatedPlots?.length) {
+                    target.generatedPlots = [...msg.generatedPlots];
+                }
+                if (!target.generatedFiles?.length && msg.generatedFiles?.length) {
+                    target.generatedFiles = [...msg.generatedFiles];
+                }
+                if ((!target.artifacts || !target.artifacts.length) && msg.artifacts?.length) {
+                    target.artifacts = [...msg.artifacts];
                 }
             }
-            target.generatedPlots = mergedPlots.length ? mergedPlots : target.generatedPlots;
-            target.generatedFiles = mergedFiles.length ? mergedFiles : target.generatedFiles;
-            target.artifacts = mergedArtifacts.length ? mergedArtifacts : target.artifacts;
         }
         if (target.isCollapsed === undefined) {
             target.isCollapsed = true;
@@ -506,21 +506,14 @@ export function useDataAnalysisAgent(
                 const uploadedArtifacts: UploadedArtifact[] = await uploadArtifacts(result.artifacts || []);
                 state.artifacts = uploadedArtifacts;
                 updateMessageOutputsFromArtifacts(message, uploadedArtifacts);
-                const appliedServerResponse = await submitPyodideExecutionResult(
-                    runnerTask,
-                    message,
-                    result,
-                    uploadedArtifacts,
-                );
-                if (!appliedServerResponse) {
-                    applyExecutionResultMetadata(message, {
-                        success: result.success,
-                        stdout: result.stdout,
-                        stderr: result.stderr,
-                        artifacts: serializeUploadedArtifacts(uploadedArtifacts),
-                        task_id: runnerTask.task_id,
-                    });
-                }
+                await submitPyodideExecutionResult(runnerTask, message, result, uploadedArtifacts);
+                applyExecutionResultMetadata(message, {
+                    success: result.success,
+                    stdout: result.stdout,
+                    stderr: result.stderr,
+                    artifacts: serializeUploadedArtifacts(uploadedArtifacts),
+                    task_id: runnerTask.task_id,
+                });
                 state.status = result.success ? "completed" : "error";
                 if (!result.success && result.error) {
                     state.errorMessage = result.error;
@@ -622,7 +615,7 @@ export function useDataAnalysisAgent(
         if (!artifacts || artifacts.length === 0) {
             return;
         }
-        message.artifacts = mergeUploadedArtifacts(message.artifacts, artifacts);
+        message.artifacts = artifacts;
         const plotNames: string[] = [];
         const fileNames: string[] = [];
         for (const artifact of artifacts) {
@@ -636,33 +629,8 @@ export function useDataAnalysisAgent(
                 fileNames.push(`generated_file/${name}`);
             }
         }
-        message.generatedPlots = mergePathEntries(message.generatedPlots, plotNames);
-        message.generatedFiles = mergePathEntries(message.generatedFiles, fileNames);
-    }
-
-    function mergePathEntries(existing: string[] | undefined, incoming: string[] | undefined): string[] {
-        const seen = new Set<string>();
-        const merged: string[] = [];
-        for (const entry of [...(existing || []), ...(incoming || [])]) {
-            if (!entry || seen.has(entry)) {
-                continue;
-            }
-            seen.add(entry);
-            merged.push(entry);
-        }
-        return merged;
-    }
-
-    function mergeUploadedArtifacts(
-        existing: UploadedArtifact[] | undefined,
-        incoming: UploadedArtifact[] | undefined,
-    ): UploadedArtifact[] {
-        const merged = new Map<string, UploadedArtifact>();
-        for (const artifact of [...(existing || []), ...(incoming || [])]) {
-            const key = artifact.dataset_id || artifact.download_url || artifact.name || generateId();
-            merged.set(key, artifact);
-        }
-        return Array.from(merged.values());
+        message.generatedPlots = plotNames.length ? plotNames : message.generatedPlots;
+        message.generatedFiles = fileNames.length ? fileNames : message.generatedFiles;
     }
 
     function serializeUploadedArtifacts(artifacts: UploadedArtifact[] = []): UploadedArtifact[] {
@@ -771,10 +739,12 @@ export function useDataAnalysisAgent(
         message: ChatMessage,
         result: PyodideRunResult,
         artifacts: UploadedArtifact[],
-    ): Promise<boolean> {
+    ) {
         if (!currentChatId.value) {
             throw new Error("No active chat to submit execution results.");
         }
+
+        const useStream = streamSupported && chatStream.value?.readyState === WebSocket.OPEN;
 
         const payload = {
             task_id: task.task_id,
@@ -800,19 +770,12 @@ export function useDataAnalysisAgent(
             throw new Error(errorMessageAsString(error, "Failed to submit execution results"));
         }
 
-        if (data) {
-            const deliveredTaskId = String(data.task_id || payload.task_id || "");
-            if (deliveredTaskId) {
-                deliveredTaskIds.add(deliveredTaskId);
+        if (!useStream && data) {
+            if (payload.task_id) {
+                deliveredTaskIds.add(payload.task_id);
             }
-            populateAssistantMessage(message, data, message.agentType || selectedAgentType.value, {
-                skipDatasetUpdate: true,
-            });
-            attachPendingCollapsedMessages(message, { mergeOutputs: true });
-            maybeRunPyodideForMessage(message);
-            return Boolean(data.agent_response);
+            appendAssistantMessage(data, message.agentType || selectedAgentType.value);
         }
-        return false;
     }
 
     function ensurePendingPyodideTasks() {
