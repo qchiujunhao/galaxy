@@ -769,8 +769,6 @@ export function useDataAnalysisAgent(
             throw new Error("No active chat to submit execution results.");
         }
 
-        const useStream = streamSupported && chatStream.value?.readyState === WebSocket.OPEN;
-
         const payload = {
             task_id: task.task_id,
             stdout: result.stdout,
@@ -795,9 +793,10 @@ export function useDataAnalysisAgent(
             throw new Error(errorMessageAsString(error, "Failed to submit execution results"));
         }
 
-        if (!useStream && data) {
-            if (payload.task_id) {
-                deliveredTaskIds.add(payload.task_id);
+        if (data) {
+            const deliveredTaskId = String(data.task_id || payload.task_id || "");
+            if (deliveredTaskId) {
+                deliveredTaskIds.add(deliveredTaskId);
             }
             appendAssistantMessage(data, message.agentType || selectedAgentType.value);
         }
