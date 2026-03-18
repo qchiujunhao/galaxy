@@ -444,7 +444,7 @@ async function runUserCode(py: any, code: string): Promise<{ success: boolean; e
                 "    elif isinstance(value, dict) and len(value) <= 10:",
                 "        try:",
                 "            preview = {k: value[k] for k in list(value)[:5]}",
-                '        summary_lines.append(f"{key} = {preview!r}")',
+                '            summary_lines.append(f"{key} = {preview!r}")',
                 "        except Exception:",
                 "            pass",
                 "try:",
