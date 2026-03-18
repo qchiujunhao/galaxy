@@ -3,6 +3,7 @@ import { faExternalLinkAlt, faMagic, faMicroscope, faPlus, faTrash } from "@fort
 import { FontAwesomeIcon } from "@fortawesome/vue-fontawesome";
 import { BAlert, BSkeleton } from "bootstrap-vue";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 
 import { GalaxyApi } from "@/api";
 import { getGalaxyInstance } from "@/app";
@@ -52,6 +53,8 @@ const chatContainer = ref<HTMLElement>();
 const selectedAgentType = ref("auto");
 const currentChatId = ref<string | null>(null);
 const hasLoadedInitialChat = ref(false);
+const router = useRouter();
+const route = useRoute();
 
 // TODO: Conditionally allow this if we have the Data Analysis agent available?
 /** Whether the Data Analysis agent is currently being used */
@@ -105,6 +108,9 @@ watch(
     () => props.exchangeId,
     async (newId, oldId) => {
         if (newId === oldId) {
+            return;
+        }
+        if (newId && newId === currentChatId.value && messages.value.length > 0) {
             return;
         }
         if (newId) {
@@ -199,6 +205,7 @@ async function submitQuery() {
 
             if (data.exchange_id) {
                 currentChatId.value = data.exchange_id;
+                syncRouteToExchange(data.exchange_id);
             }
 
             const assistantMessage: ChatMessage = {
@@ -458,6 +465,7 @@ function startNewChat() {
     pyodideTaskToMessage.clear();
     selectedDatasets.value = [];
     query.value = "";
+    syncRouteToExchange(null);
 }
 
 async function deleteCurrentChat() {
@@ -481,6 +489,25 @@ function popOutToScratchbook() {
     const path = currentChatId.value ? `/chatgxy/${currentChatId.value}` : "/chatgxy";
     const url = `${path}?compact=true`;
     Galaxy.frame.add({ title: "ChatGXY", url });
+}
+
+function syncRouteToExchange(exchangeId: string | null) {
+    const currentRouteExchangeId = typeof route.params.exchangeId === "string" ? route.params.exchangeId : undefined;
+    const compactQuery = route.query.compact;
+    const nextQuery = compactQuery !== undefined ? { compact: compactQuery } : undefined;
+
+    if (exchangeId) {
+        if (currentRouteExchangeId === exchangeId) {
+            return;
+        }
+        router.replace({ path: `/chatgxy/${exchangeId}`, query: nextQuery });
+        return;
+    }
+
+    if (!currentRouteExchangeId) {
+        return;
+    }
+    router.replace({ path: "/chatgxy", query: nextQuery });
 }
 </script>
 
