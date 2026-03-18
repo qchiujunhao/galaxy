@@ -55,6 +55,14 @@ class ChatExecutionService:
         if not exchange:
             return {"message": "Chat exchange not found"}
 
+        if payload.task_id:
+            existing_response = self._find_existing_task_response(exchange, str(payload.task_id))
+            if existing_response is not None:
+                existing_response.setdefault("message", "Execution result already stored")
+                existing_response.setdefault("exchange_id", exchange_id)
+                existing_response.setdefault("task_id", payload.task_id)
+                return existing_response
+
         metadata = dict(payload.metadata or {})
 
         artifacts_payload = self._normalize_artifacts(payload.artifacts or [])
@@ -195,6 +203,38 @@ class ChatExecutionService:
             "exchange_id": exchange_id,
             "task_id": payload.task_id,
         }
+
+    def _find_existing_task_response(self, exchange: Any, task_id: str) -> Optional[dict[str, Any]]:
+        messages = list(getattr(exchange, "messages", []) or [])
+        for index, message in enumerate(messages):
+            raw = getattr(message, "message", None)
+            if not raw:
+                continue
+            try:
+                data = json.loads(raw)
+            except (json.JSONDecodeError, TypeError, AttributeError):
+                continue
+            if data.get("role") != "execution_result" or str(data.get("task_id")) != task_id:
+                continue
+            for candidate in messages[index + 1 :]:
+                candidate_raw = getattr(candidate, "message", None)
+                if not candidate_raw:
+                    continue
+                try:
+                    candidate_data = json.loads(candidate_raw)
+                except (json.JSONDecodeError, TypeError, AttributeError):
+                    continue
+                agent_response = candidate_data.get("agent_response")
+                if candidate_data.get("response") and isinstance(agent_response, dict):
+                    return {
+                        "response": candidate_data.get("response", ""),
+                        "agent_response": agent_response,
+                        "dataset_ids": candidate_data.get("dataset_ids", []),
+                    }
+            return {
+                "dataset_ids": data.get("metadata", {}).get("selected_dataset_ids", []),
+            }
+        return None
 
     def _create_artifact_collection(
         self,
