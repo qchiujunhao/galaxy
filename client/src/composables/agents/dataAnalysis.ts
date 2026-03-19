@@ -579,7 +579,7 @@ export function useDataAnalysisAgent(
 
         try {
             const rawRoot = getAppRoot() || "/";
-            const appRoot = rawRoot.replace(/\/+$/, "") || "/";
+            const appRoot = rawRoot.replace(/\/+$/, "");
             const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
             const wsUrl = `${protocol}//${window.location.host}${appRoot}/api/chat/exchange/${exchangeId}/stream`;
             const socket = new WebSocket(wsUrl);
@@ -879,6 +879,8 @@ export function useDataAnalysisAgent(
     );
 
     return {
+        /** Append or merge an assistant response through the shared normalization path */
+        appendAssistantMessage,
         /** Apply dataset selection from messages */
         applyDatasetSelectionFromMessages,
         /** Apply execution result metadata to a message, updating its state and outputs accordingly */

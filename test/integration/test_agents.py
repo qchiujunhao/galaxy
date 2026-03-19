@@ -40,6 +40,7 @@ from galaxy.agents import (
     GalaxyAgentDependencies,
 )
 from galaxy.agents.error_analysis import ErrorAnalysisResult
+from galaxy.schema.agents import AgentResponse
 from galaxy.tool_util_models import UserToolSource
 from galaxy.util.unittest_utils import pytestmark_live_llm
 from galaxy_test.base.populators import (
@@ -117,43 +118,51 @@ class TestAgentsApiMocked(AgentIntegrationTestCase):
     def test_chat_with_dataset_context_records_execution_metadata(self, mock_response):
         """Dataset selections should persist and execution metadata should be captured."""
 
-        mock_response.return_value = {
-            "content": "Summary placeholder",
-            "agent_type": "data_analysis",
-            "confidence": "medium",
-            "suggestions": [],
-            "metadata": {
-                "datasets_used": ["encoded-dataset-id"],
-                "analysis_steps": [
-                    {
-                        "type": "observation",
-                        "content": "Execution finished",
+        history_id = self.dataset_populator.new_history()
+        dataset = self.dataset_populator.new_dataset(history_id, content="1 2 3")
+        dataset_id = dataset["id"]
+
+        mock_response.return_value = AgentResponse.model_validate(
+            {
+                "content": "Summary placeholder",
+                "agent_type": "data_analysis",
+                "confidence": "medium",
+                "suggestions": [],
+                "metadata": {
+                    "datasets_used": [dataset_id],
+                    "analysis_steps": [
+                        {
+                            "type": "observation",
+                            "content": "Execution finished",
+                            "stdout": "analysis complete",
+                            "stderr": "",
+                            "success": True,
+                        }
+                    ],
+                    "execution": {
+                        "success": True,
                         "stdout": "analysis complete",
                         "stderr": "",
-                        "success": True,
-                    }
-                ],
-                "execution": {
-                    "success": True,
-                    "stdout": "analysis complete",
-                    "stderr": "",
-                    "artifacts": [],
-                    "datasets": [{"id": "encoded-dataset-id"}],
+                        "artifacts": [],
+                        "datasets": [{"id": dataset_id}],
+                    },
                 },
-            },
-        }
+            }
+        )
 
         payload = {
             "query": "Analyze dataset 1",
             "context": "",
-            "dataset_ids": ["encoded-dataset-id"],
+            "dataset_ids": [dataset_id],
         }
 
-        response = self._post("chat", data=json.dumps(payload), content_type="application/json")
+        response = self._post("chat", data=payload, json=True)
         self._assert_status_code_is_ok(response)
         data = response.json()
-        assert data.get("dataset_ids") == ["encoded-dataset-id"]
-        assert data.get("agent_response", {}).get("metadata", {}).get("datasets_used") == ["encoded-dataset-id"]
+        assert data.get("dataset_ids") == [dataset_id]
+        response_metadata = data.get("agent_response", {}).get("metadata", {})
+        datasets_used = response_metadata.get("datasets_used", [])
+        assert len(datasets_used) == 1
 
         exchange_id = data.get("exchange_id")
         assert exchange_id is not None
@@ -161,7 +170,7 @@ class TestAgentsApiMocked(AgentIntegrationTestCase):
         history_response = self._get(f"chat/exchange/{exchange_id}/messages")
         self._assert_status_code_is_ok(history_response)
         history = history_response.json()
-        assert any(msg.get("dataset_ids") == ["encoded-dataset-id"] for msg in history if msg.get("role") == "user")
+        assert any(msg.get("dataset_ids") == [dataset_id] for msg in history if msg.get("role") == "user")
         assistant_messages = [msg for msg in history if msg.get("role") == "assistant"]
         assert assistant_messages
         assert any(
