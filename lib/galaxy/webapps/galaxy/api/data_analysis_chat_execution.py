@@ -12,7 +12,6 @@ from fastapi import (
     status,
     UploadFile,
     WebSocket,
-    WebSocketDisconnect,
 )
 
 from galaxy.exceptions import (
@@ -22,8 +21,6 @@ from galaxy.exceptions import (
     RequestParameterInvalidException,
     RequestParameterMissingException,
 )
-from galaxy.managers.chat import ChatManager
-from galaxy.managers.chat_execution_streams import ChatExecutionStreamsManager
 from galaxy.managers.context import ProvidesHistoryContext
 from galaxy.managers.data_analysis_chat_artifacts import DataAnalysisChatArtifactsManager
 from galaxy.managers.data_analysis_chat_datasets import DataAnalysisChatDatasetsManager
@@ -47,8 +44,6 @@ router = Router(tags=["chat"])
 
 @router.cbv
 class DataAnalysisChatExecutionAPI:
-    chat_manager: ChatManager = depends(ChatManager)
-    chat_execution_streams: ChatExecutionStreamsManager = depends(ChatExecutionStreamsManager)
     data_analysis_chat_artifacts_manager: DataAnalysisChatArtifactsManager = depends(DataAnalysisChatArtifactsManager)
     data_analysis_chat_datasets_manager: DataAnalysisChatDatasetsManager = depends(DataAnalysisChatDatasetsManager)
     data_analysis_chat_execution_manager: DataAnalysisChatExecutionManager = depends(DataAnalysisChatExecutionManager)
@@ -97,25 +92,10 @@ class DataAnalysisChatExecutionAPI:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
         trans = WorkRequestContext(app=app, user=user)
-        exchange = self.chat_manager.get_exchange_by_id(trans, exchange_id)
-        if exchange is None:
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-            return
-
-        await websocket.accept()
-        await self.chat_execution_streams.register(exchange_id, websocket)
         try:
-            while True:
-                try:
-                    message = await websocket.receive_text()
-                except WebSocketDisconnect:
-                    break
-                if message and message.lower().startswith("ping"):
-                    await websocket.send_text("pong")
-        except WebSocketDisconnect:
-            pass
-        finally:
-            await self.chat_execution_streams.remove(exchange_id, websocket)
+            await self.data_analysis_chat_execution_manager.handle_exchange_stream(exchange_id, websocket, trans)
+        except ObjectNotFound:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
 
     @router.post("/api/chat/exchange/{exchange_id}/pyodide_result")
     async def submit_pyodide_result(

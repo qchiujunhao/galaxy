@@ -2,6 +2,11 @@
 
 from typing import Any
 
+from fastapi import (
+    WebSocket,
+    WebSocketDisconnect,
+)
+
 from galaxy.exceptions import ObjectNotFound
 from galaxy.managers.chat import ChatManager
 from galaxy.managers.chat_execution import ChatExecutionService
@@ -29,6 +34,29 @@ class DataAnalysisChatExecutionManager:
         if exchange is None:
             raise ObjectNotFound("Chat exchange not found")
         return exchange
+
+    async def handle_exchange_stream(
+        self,
+        exchange_id: int,
+        websocket: WebSocket,
+        trans: ProvidesHistoryContext,
+    ) -> None:
+        self.ensure_exchange_access(trans, exchange_id)
+
+        await websocket.accept()
+        await self.chat_execution_streams.register(exchange_id, websocket)
+        try:
+            while True:
+                try:
+                    message = await websocket.receive_text()
+                except WebSocketDisconnect:
+                    break
+                if message and message.lower().startswith("ping"):
+                    await websocket.send_text("pong")
+        except WebSocketDisconnect:
+            pass
+        finally:
+            await self.chat_execution_streams.remove(exchange_id, websocket)
 
     async def submit_pyodide_result(
         self,
