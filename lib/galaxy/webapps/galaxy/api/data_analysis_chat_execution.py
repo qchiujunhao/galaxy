@@ -4,7 +4,6 @@ from typing import (
 )
 
 from fastapi import (
-    Depends,
     File,
     Form,
     HTTPException,
@@ -15,24 +14,28 @@ from fastapi import (
 )
 
 from galaxy.exceptions import (
+    AuthenticationFailed,
     InternalServerError,
     ItemAccessibilityException,
+    MalformedId,
     ObjectNotFound,
     RequestParameterInvalidException,
     RequestParameterMissingException,
 )
 from galaxy.managers.context import ProvidesHistoryContext
+from galaxy.managers.session import GalaxySessionManager
 from galaxy.managers.data_analysis_chat_artifacts import DataAnalysisChatArtifactsManager
 from galaxy.managers.data_analysis_chat_datasets import DataAnalysisChatDatasetsManager
 from galaxy.managers.data_analysis_chat_execution import DataAnalysisChatExecutionManager
+from galaxy.managers.users import UserManager
 from galaxy.model import User
+from galaxy.security.idencoding import IdEncodingHelper
 from galaxy.schema.agents import UploadedArtifact
 from galaxy.schema.fields import DecodedDatabaseIdField
 from galaxy.schema.schema import PyodideResultPayload
 from galaxy.webapps.galaxy.api import (
     depends,
     get_app,
-    get_user,
     DependsOnTrans,
     DependsOnUser,
     Router,
@@ -40,6 +43,37 @@ from galaxy.webapps.galaxy.api import (
 from galaxy.work.context import WorkRequestContext
 
 router = Router(tags=["chat"])
+
+
+def _get_websocket_user(websocket: WebSocket, app) -> Optional[User]:
+    session_cookie = websocket.cookies.get("galaxysession")
+    if session_cookie:
+        security = app[IdEncodingHelper]
+        session_manager = app[GalaxySessionManager]
+        try:
+            session_key = security.decode_guid(session_cookie)
+        except MalformedId:
+            session_key = None
+        if session_key:
+            galaxy_session = session_manager.get_session_from_session_key(session_key)
+            if galaxy_session and galaxy_session.user:
+                return galaxy_session.user
+
+    user_manager = app[UserManager]
+    api_key = websocket.query_params.get("key") or websocket.headers.get("x-api-key")
+    if api_key:
+        try:
+            return user_manager.by_api_key(api_key)
+        except AuthenticationFailed:
+            return None
+
+    authorization = websocket.headers.get("authorization")
+    if authorization and authorization.startswith("Bearer "):
+        access_token = authorization.removeprefix("Bearer ").strip()
+        if access_token:
+            return user_manager.by_oidc_access_token(access_token)
+
+    return None
 
 
 @router.cbv
@@ -79,23 +113,6 @@ class DataAnalysisChatExecutionAPI:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         except InternalServerError as exc:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
-
-    @router.websocket("/api/chat/exchange/{exchange_id}/stream")
-    async def chat_exchange_stream(
-        self,
-        exchange_id: DecodedDatabaseIdField,
-        websocket: WebSocket,
-        app=Depends(get_app),
-        user: Optional[User] = Depends(get_user),
-    ) -> None:
-        if user is None:
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-            return
-        trans = WorkRequestContext(app=app, user=user)
-        try:
-            await self.data_analysis_chat_execution_manager.handle_exchange_stream(exchange_id, websocket, trans)
-        except ObjectNotFound:
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
 
     @router.post("/api/chat/exchange/{exchange_id}/pyodide_result")
     async def submit_pyodide_result(
@@ -148,3 +165,22 @@ class DataAnalysisChatExecutionAPI:
         from starlette.responses import StreamingResponse
 
         return StreamingResponse(iter_file(), media_type=prepared_download.mime_type, headers=headers)
+
+
+@router.websocket("/api/chat/exchange/{exchange_id}/stream")
+async def chat_exchange_stream(
+    exchange_id: DecodedDatabaseIdField,
+    websocket: WebSocket,
+) -> None:
+    app = get_app()
+    user = _get_websocket_user(websocket, app)
+    if user is None:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    execution_manager = app[DataAnalysisChatExecutionManager]
+    trans = WorkRequestContext(app=app, user=user)
+    try:
+        await execution_manager.handle_exchange_stream(exchange_id, websocket, trans)
+    except ObjectNotFound:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
