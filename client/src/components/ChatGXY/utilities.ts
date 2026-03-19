@@ -220,12 +220,6 @@ export function shouldAutoCollapse(message: ChatMessage): boolean {
     if (metadata.is_complete === true) {
         return false;
     }
-    if (metadata.completion_state === "complete") {
-        return false;
-    }
-    if ((metadata.raw_answer || metadata.summary) && !metadata.pyodide_task) {
-        return false;
-    }
     if (metadata.executed_task || metadata.execution || metadata.pyodide_status === "completed") {
         return true;
     }
