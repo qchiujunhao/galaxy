@@ -80,7 +80,7 @@ onMounted(async () => {
         await loadLatestChat();
     }
 
-    if (!hasLoadedInitialChat.value) {
+    if (!hasLoadedInitialChat.value && !loadError.value) {
         showWelcome();
     }
 });
@@ -127,16 +127,17 @@ function showWelcome() {
     });
 }
 
-const { deleteCurrentChat, loadChatById, loadLatestChat, startNewChat, syncRouteToExchange } = useChatGxyConversation({
-    chatContainer,
-    currentChatId,
-    hasLoadedInitialChat,
-    messages,
-    query,
-    prepareConversationReplay,
-    rebuildConversationMessages,
-    resetConversationState,
-});
+const { deleteCurrentChat, loadChatById, loadError, loadLatestChat, startNewChat, syncRouteToExchange } =
+    useChatGxyConversation({
+        chatContainer,
+        currentChatId,
+        hasLoadedInitialChat,
+        messages,
+        query,
+        prepareConversationReplay,
+        rebuildConversationMessages,
+        resetConversationState,
+    });
 
 async function submitQuery() {
     if (!query.value.trim()) {
@@ -331,6 +332,9 @@ function popOutToScratchbook() {
         </div>
 
         <div ref="chatContainer" class="chat-messages">
+            <BAlert v-if="loadError" variant="danger" show>
+                {{ loadError }}
+            </BAlert>
             <ChatMessageCell
                 v-for="message in messages"
                 :key="message.id"

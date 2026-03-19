@@ -522,7 +522,8 @@ class ChatAPI:
             return
         if not metadata or not isinstance(metadata, dict):
             return
-        if "pyodide_task" not in metadata:
+        task = metadata.get("pyodide_task")
+        if not isinstance(task, dict) or not task:
             return
         status = metadata.get("pyodide_status") or "pending"
         if status not in (None, "pending"):

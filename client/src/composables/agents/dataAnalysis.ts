@@ -7,6 +7,7 @@ import {
     applyCollapseState,
     formatGeneratedEntry,
     generateId,
+    isDataAnalysisMessage,
     normaliseAnalysisSteps,
     normaliseArtifactList,
     normalisePathList,
@@ -467,7 +468,13 @@ export function useDataAnalysisAgent(
         }
 
         applyDatasetSelectionFromMessages(conversation);
-        assistantMessagesToReplay.forEach((assistantMessage) => maybeRunPyodideForMessage(assistantMessage));
+        assistantMessagesToReplay.forEach((assistantMessage) => {
+            try {
+                maybeRunPyodideForMessage(assistantMessage);
+            } catch (error) {
+                console.error("Failed to restore Pyodide task for chat history message", error);
+            }
+        });
         if (pendingCollapsedMessages.length) {
             pendingCollapsedMessages.forEach((message) => rebuiltMessages.push(message));
             pendingCollapsedMessages.length = 0;
