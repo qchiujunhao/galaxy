@@ -370,6 +370,7 @@ class DataAnalysisAgent(BaseGalaxyAgent):
 
         if pyodide_task:
             response_metadata["pyodide_task"] = pyodide_task
+            response_metadata["completion_state"] = "pending"
             response_metadata["pyodide_status"] = "pending"
             response_metadata["pyodide_started_at"] = datetime.now(timezone.utc).isoformat()
             response_metadata["pyodide_context"] = {
