@@ -612,6 +612,12 @@ def build_context_text(
     execution_messages: Iterable[Dict[str, Any]],
     examples_snippet: str,
 ) -> str:
+    def _clean_history_content(content: Any) -> str:
+        text = str(content or "").strip()
+        if not text:
+            return ""
+        return text
+
     dataset_lines = (
         "\n".join(
             f'- Dataset {index + 1} (ID: {encode_id(dataset_id)}) — use load_dataset("{encode_id(dataset_id)}") or get_dataset_path("{encode_id(dataset_id)}") (dataset_{index + 1} and other aliases are also available)'
@@ -621,11 +627,20 @@ def build_context_text(
     )
 
     history_lines = []
+    seen_history_entries = set()
     for entry in conversation_history:
         role = entry.get("role", "user")
-        content = entry.get("content", "")
-        history_lines.append(f"{role}: {content}")
-    history_block = "\n".join(history_lines[-8:]) if history_lines else "None"
+        if role == "execution_result":
+            continue
+        content = _clean_history_content(entry.get("content", ""))
+        if not content:
+            continue
+        history_entry = f"{role}: {content}"
+        if history_entry in seen_history_entries:
+            continue
+        seen_history_entries.add(history_entry)
+        history_lines.append(history_entry)
+    history_block = "\n".join(history_lines[-4:]) if history_lines else "None"
 
     execution_lines = []
     for entry in execution_messages:
@@ -635,7 +650,7 @@ def build_context_text(
         execution_lines.append(
             f"Execution ({'success' if success else 'error'}):\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
         )
-    execution_block = "\n\n".join(execution_lines[-4:]) if execution_lines else "None"
+    execution_block = "\n\n".join(execution_lines[-2:]) if execution_lines else "None"
 
     sections = [
         "DATASETS:",

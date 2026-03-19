@@ -2,7 +2,10 @@ import json
 from types import SimpleNamespace
 
 from galaxy.agents.base import GalaxyAgentDependencies
-from galaxy.agents.dspy_adapter import GalaxyDSPyPlanner
+from galaxy.agents.dspy_adapter import (
+    build_context_text,
+    GalaxyDSPyPlanner,
+)
 from galaxy.util.pyodide import infer_requirements_from_python
 
 
@@ -64,3 +67,29 @@ def test_dspy_initial_plan_limits_react_iterations(monkeypatch):
     planner.plan(question="run an EDA", context_text="DATASETS:\n- None")
 
     assert captured["max_iters"] == GalaxyDSPyPlanner._INITIAL_PLAN_MAX_ITERS
+
+
+def test_build_context_text_deduplicates_history_and_limits_executions():
+    context_text = build_context_text(
+        question="run an EDA",
+        datasets=[],
+        conversation_history=[
+            {"role": "user", "content": "run an EDA"},
+            {"role": "assistant", "content": "EDA started"},
+            {"role": "assistant", "content": "EDA started"},
+            {"role": "execution_result", "content": ""},
+            {"role": "assistant", "content": "EDA completed"},
+        ],
+        execution_messages=[
+            {"success": True, "stdout": "csv round", "stderr": ""},
+            {"success": True, "stdout": "plot round", "stderr": ""},
+            {"success": False, "stdout": "", "stderr": "final retry"},
+        ],
+        examples_snippet="",
+    )
+
+    assert context_text.count("assistant: EDA started") == 1
+    assert "execution_result:" not in context_text
+    assert "csv round" not in context_text
+    assert "plot round" in context_text
+    assert "final retry" in context_text
