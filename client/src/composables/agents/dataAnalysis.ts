@@ -95,6 +95,43 @@ export function useDataAnalysisAgent(
 
     // Methods
 
+    function mergeUniquePaths(...groups: Array<string[] | undefined>): string[] | undefined {
+        const merged: string[] = [];
+        const seen = new Set<string>();
+        for (const group of groups) {
+            for (const entry of group || []) {
+                if (!entry || seen.has(entry)) {
+                    continue;
+                }
+                seen.add(entry);
+                merged.push(entry);
+            }
+        }
+        return merged.length ? merged : undefined;
+    }
+
+    function mergeArtifacts(...groups: Array<UploadedArtifact[] | undefined>): UploadedArtifact[] | undefined {
+        const merged: UploadedArtifact[] = [];
+        const seen = new Set<string>();
+        for (const group of groups) {
+            for (const artifact of group || []) {
+                const key = artifact.dataset_id || artifact.name || artifact.download_url || generateId();
+                if (seen.has(key)) {
+                    continue;
+                }
+                seen.add(key);
+                merged.push(artifact);
+            }
+        }
+        return merged.length ? merged : undefined;
+    }
+
+    function mergeMessageOutputs(target: ChatMessage, source: ChatMessage) {
+        target.artifacts = mergeArtifacts(target.artifacts, source.artifacts);
+        target.generatedPlots = mergeUniquePaths(target.generatedPlots, source.generatedPlots);
+        target.generatedFiles = mergeUniquePaths(target.generatedFiles, source.generatedFiles);
+    }
+
     function appendAssistantMessage(payload: any, fallbackAgentType: string): ChatMessage {
         const existingMessage = findMessageForPayload(payload);
         if (existingMessage) {
@@ -192,22 +229,15 @@ export function useDataAnalysisAgent(
         if (!pendingCollapsedMessages.length) {
             return;
         }
-        target.collapsedHistory = pendingCollapsedMessages.map((msg) => {
+        const existingHistory = target.collapsedHistory ? [...target.collapsedHistory] : [];
+        target.collapsedHistory = [...existingHistory, ...pendingCollapsedMessages].map((msg) => {
             msg.isCollapsed = true;
             return msg;
         });
         for (let i = pendingCollapsedMessages.length - 1; i >= 0; i -= 1) {
             const msg = pendingCollapsedMessages[i];
             if (msg) {
-                if (!target.generatedPlots?.length && msg.generatedPlots?.length) {
-                    target.generatedPlots = [...msg.generatedPlots];
-                }
-                if (!target.generatedFiles?.length && msg.generatedFiles?.length) {
-                    target.generatedFiles = [...msg.generatedFiles];
-                }
-                if ((!target.artifacts || !target.artifacts.length) && msg.artifacts?.length) {
-                    target.artifacts = [...msg.artifacts];
-                }
+                mergeMessageOutputs(target, msg);
             }
         }
         if (target.isCollapsed === undefined) {
@@ -615,7 +645,7 @@ export function useDataAnalysisAgent(
         if (!artifacts || artifacts.length === 0) {
             return;
         }
-        message.artifacts = artifacts;
+        message.artifacts = mergeArtifacts(message.artifacts, artifacts);
         const plotNames: string[] = [];
         const fileNames: string[] = [];
         for (const artifact of artifacts) {
@@ -629,8 +659,8 @@ export function useDataAnalysisAgent(
                 fileNames.push(`generated_file/${name}`);
             }
         }
-        message.generatedPlots = plotNames.length ? plotNames : message.generatedPlots;
-        message.generatedFiles = fileNames.length ? fileNames : message.generatedFiles;
+        message.generatedPlots = mergeUniquePaths(message.generatedPlots, plotNames);
+        message.generatedFiles = mergeUniquePaths(message.generatedFiles, fileNames);
     }
 
     function serializeUploadedArtifacts(artifacts: UploadedArtifact[] = []): UploadedArtifact[] {
