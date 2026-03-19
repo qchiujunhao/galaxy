@@ -21,6 +21,37 @@ import { useToast } from "../toast";
 import { useHistoryDatasets } from "../useHistoryDatasets";
 import { type PyodideArtifact, type PyodideRunResult, type PyodideTask, usePyodideRunner } from "../usePyodideRunner";
 
+interface ConversationMessageEntry {
+    agent_response?: {
+        agent_type?: string;
+        confidence?: ConfidenceLevel;
+        metadata?: ConversationMetadata;
+        suggestions?: string[];
+    };
+    agent_type?: string;
+    content?: string;
+    feedback?: number | null;
+    role?: string;
+    task_id?: string;
+    timestamp?: string;
+}
+
+interface ConversationMetadata {
+    analysis_steps?: unknown;
+    artifacts?: unknown;
+    executed_task?: {
+        task_id?: string;
+    };
+    execution?: {
+        artifacts?: unknown;
+    };
+    files?: unknown;
+    plots?: unknown;
+    pyodide_task?: {
+        task_id?: string;
+    };
+}
+
 /** Composable that is enabled if we are using the Data Analysis agent in ChatGXY
  * @param messages - Reactive reference to the chat messages array
  * @param currentChatId - Reactive reference to the current chat/exchange ID
@@ -132,6 +163,22 @@ export function useDataAnalysisAgent(
         target.generatedFiles = mergeUniquePaths(target.generatedFiles, source.generatedFiles);
     }
 
+    function applyLatestAssistantState(target: ChatMessage, latest: ChatMessage) {
+        target.content = latest.content;
+        target.timestamp = latest.timestamp;
+        target.agentType = latest.agentType;
+        target.confidence = latest.confidence;
+        target.feedback = latest.feedback;
+        target.agentResponse = latest.agentResponse;
+        target.suggestions = latest.suggestions;
+        target.analysisSteps = latest.analysisSteps;
+        target.routingInfo = latest.routingInfo;
+        target.isCollapsible = latest.isCollapsible;
+        if (latest.isCollapsed !== undefined) {
+            target.isCollapsed = latest.isCollapsed;
+        }
+    }
+
     function appendAssistantMessage(payload: any, fallbackAgentType: string): ChatMessage {
         const existingMessage = findMessageForPayload(payload);
         if (existingMessage) {
@@ -182,6 +229,18 @@ export function useDataAnalysisAgent(
                 return;
             }
         }
+    }
+
+    function prepareConversationReplay() {
+        pendingCollapsedMessages.length = 0;
+        deliveredTaskIds.clear();
+        pyodideTaskToMessage.clear();
+    }
+
+    function resetConversationState() {
+        prepareConversationReplay();
+        Object.keys(pyodideExecutions).forEach((key) => delete pyodideExecutions[key]);
+        selectedDatasets.value = [];
     }
 
     function applyExecutionResultMetadata(message: ChatMessage, execResult: any) {
@@ -285,6 +344,136 @@ export function useDataAnalysisAgent(
             }
         }
         return undefined;
+    }
+
+    function rebuildConversationMessages(conversation: unknown[], exchangeId: string): ChatMessage[] {
+        const taskIdToMessage: Record<string, ChatMessage> = {};
+        const pendingExecResults: Record<string, unknown> = {};
+        const assistantMessagesToReplay: ChatMessage[] = [];
+        const rebuiltMessages: ChatMessage[] = [];
+        let currentTurnAssistant: ChatMessage | null = null;
+
+        for (const [index, entry] of conversation.entries()) {
+            const messageEntry = entry as ConversationMessageEntry;
+            if (messageEntry.role === "execution_result") {
+                if (messageEntry.task_id) {
+                    deliveredTaskIds.add(String(messageEntry.task_id));
+                    const target = taskIdToMessage[String(messageEntry.task_id)];
+                    if (target) {
+                        applyExecutionResultMetadata(target, messageEntry);
+                    } else {
+                        pendingExecResults[String(messageEntry.task_id)] = messageEntry;
+                    }
+                }
+                continue;
+            }
+
+            if (messageEntry.role !== "user" && messageEntry.role !== "assistant") {
+                continue;
+            }
+
+            const message: ChatMessage = {
+                id: `hist-${messageEntry.role}-${exchangeId}-${index}`,
+                role: messageEntry.role,
+                content: messageEntry.content || "",
+                timestamp: messageEntry.timestamp ? new Date(messageEntry.timestamp) : new Date(),
+                feedback: null,
+            };
+
+            if (messageEntry.role === "user") {
+                currentTurnAssistant = null;
+                rebuiltMessages.push(message);
+                continue;
+            }
+
+            message.agentType = messageEntry.agent_response?.agent_type || messageEntry.agent_type;
+            message.confidence = messageEntry.agent_response?.confidence || "medium";
+            message.feedback = messageEntry.feedback === 1 ? "up" : messageEntry.feedback === 0 ? "down" : null;
+
+            if (messageEntry.agent_response) {
+                message.agentResponse = messageEntry.agent_response;
+                message.suggestions = messageEntry.agent_response.suggestions || [];
+                const metadata = messageEntry.agent_response.metadata;
+                const steps = metadata ? normaliseAnalysisSteps(metadata.analysis_steps) : [];
+                if (steps.length) {
+                    message.analysisSteps = steps;
+                }
+                if (metadata) {
+                    const artifactSource = metadata.artifacts ?? metadata.execution?.artifacts;
+                    const storedArtifacts = normaliseArtifactList(artifactSource);
+                    updateMessageOutputsFromArtifacts(message, storedArtifacts);
+                    const plots = normalisePathList(metadata.plots);
+                    message.generatedPlots = plots.length ? plots : undefined;
+                    const files = normalisePathList(metadata.files);
+                    message.generatedFiles = files.length ? files : undefined;
+                    const executedTask = metadata.executed_task;
+                    const pendingTask = metadata.pyodide_task;
+                    const taskIdsToCheck = [executedTask?.task_id, pendingTask?.task_id].filter(Boolean) as string[];
+
+                    const taskTarget =
+                        currentTurnAssistant &&
+                        isDataAnalysisMessage(currentTurnAssistant) &&
+                        isDataAnalysisMessage(message)
+                            ? currentTurnAssistant
+                            : message;
+
+                    if (executedTask?.task_id) {
+                        const taskId = String(executedTask.task_id);
+                        deliveredTaskIds.add(taskId);
+                        pyodideTaskToMessage.set(taskId, taskTarget);
+                        taskIdToMessage[taskId] = taskTarget;
+                    }
+                    if (pendingTask?.task_id) {
+                        const taskId = String(pendingTask.task_id);
+                        pyodideTaskToMessage.set(taskId, taskTarget);
+                        taskIdToMessage[taskId] = taskTarget;
+                    }
+                    taskIdsToCheck.forEach((taskId) => {
+                        if (pendingExecResults[taskId]) {
+                            applyExecutionResultMetadata(taskTarget, pendingExecResults[taskId]);
+                            delete pendingExecResults[taskId];
+                        }
+                    });
+                }
+            }
+
+            applyCollapseState(message);
+
+            if (currentTurnAssistant && isDataAnalysisMessage(currentTurnAssistant) && isDataAnalysisMessage(message)) {
+                const history = currentTurnAssistant.collapsedHistory ? [...currentTurnAssistant.collapsedHistory] : [];
+                message.isCollapsed = true;
+                history.push(message);
+                currentTurnAssistant.collapsedHistory = history;
+                updateMessageOutputsFromArtifacts(currentTurnAssistant, message.artifacts);
+                currentTurnAssistant.generatedPlots = [
+                    ...(currentTurnAssistant.generatedPlots || []),
+                    ...(message.generatedPlots || []).filter(
+                        (entry) => !(currentTurnAssistant.generatedPlots || []).includes(entry),
+                    ),
+                ];
+                currentTurnAssistant.generatedFiles = [
+                    ...(currentTurnAssistant.generatedFiles || []),
+                    ...(message.generatedFiles || []).filter(
+                        (entry) => !(currentTurnAssistant.generatedFiles || []).includes(entry),
+                    ),
+                ];
+                applyLatestAssistantState(currentTurnAssistant, message);
+                continue;
+            }
+
+            currentTurnAssistant = message;
+            rebuiltMessages.push(message);
+            assistantMessagesToReplay.push(message);
+        }
+
+        applyDatasetSelectionFromMessages(conversation);
+        assistantMessagesToReplay.forEach((assistantMessage) => maybeRunPyodideForMessage(assistantMessage));
+        if (pendingCollapsedMessages.length) {
+            pendingCollapsedMessages.forEach((message) => rebuiltMessages.push(message));
+            pendingCollapsedMessages.length = 0;
+        }
+
+        return rebuiltMessages;
     }
 
     // TODO: Unused method, remove if never needed now
@@ -885,6 +1074,8 @@ export function useDataAnalysisAgent(
         applyDatasetSelectionFromMessages,
         /** Apply execution result metadata to a message, updating its state and outputs accordingly */
         applyExecutionResultMetadata,
+        /** Clear replay-only state before rebuilding a conversation from persisted messages */
+        prepareConversationReplay,
         /** Attach pending collapsed messages to the chat */
         attachPendingCollapsedMessages,
         /** Function to close the chat stream WebSocket connection */
@@ -905,6 +1096,10 @@ export function useDataAnalysisAgent(
         pendingCollapsedMessages,
         /** Reactive object tracking the state of Pyodide executions by task ID */
         pyodideExecutions,
+        /** Rebuild conversation messages with DA-specific metadata, task wiring, and replay semantics */
+        rebuildConversationMessages,
+        /** Reset DA-specific conversation state when starting a new chat */
+        resetConversationState,
         /** Whether the Pyodide runner is currently executing a task, used to disable UI interactions during execution */
         pyodideRunnerRunning,
         /** Mapping from Pyodide task IDs to their corresponding chat messages for routing updates */

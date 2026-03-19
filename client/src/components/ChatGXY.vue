@@ -9,22 +9,12 @@ import { getGalaxyInstance } from "@/app";
 import { useAgentActions } from "@/composables/agentActions";
 import { useDataAnalysisAgent } from "@/composables/agents/dataAnalysis";
 import { useMarkdown } from "@/composables/markdown";
+import { useChatGxyConversation } from "@/composables/useChatGxyConversation";
 import { errorMessageAsString } from "@/utils/simple-error";
 
 import { getAgentIcon } from "./ChatGXY/agentTypes";
-import type { ChatHistoryItem, ChatMessage } from "./ChatGXY/types";
-import {
-    applyCollapseState,
-    escapeHtml,
-    generateId,
-    hasArtifacts,
-    isAwaitingExecution,
-    isDataAnalysisMessage,
-    normaliseAnalysisSteps,
-    normaliseArtifactList,
-    normalisePathList,
-    scrollToBottom,
-} from "./ChatGXY/utilities";
+import type { ChatMessage } from "./ChatGXY/types";
+import { escapeHtml, generateId, hasArtifacts, isAwaitingExecution, scrollToBottom } from "./ChatGXY/utilities";
 
 import GButton from "./BaseComponents/GButton.vue";
 import ChatInput from "./ChatGXY/ChatInput.vue";
@@ -61,22 +51,19 @@ const usingDataAnalysisAgent = ref(false);
 // Data Analysis agent state and actions
 const {
     appendAssistantMessage,
-    applyDatasetSelectionFromMessages,
-    applyExecutionResultMetadata,
     closeChatStream,
     datasetError,
     datasetOptions,
-    deliveredTaskIds,
     formDataOptions,
     loadingDatasets,
-    maybeRunPyodideForMessage,
     pendingCollapsedMessages,
+    prepareConversationReplay,
     pyodideExecutions,
     pyodideRunnerRunning,
-    pyodideTaskToMessage,
+    rebuildConversationMessages,
+    resetConversationState,
     selectedDatasets,
     selectedDatasetsFormData,
-    updateMessageOutputsFromArtifacts,
 } = useDataAnalysisAgent(usingDataAnalysisAgent, messages, currentChatId, selectedAgentType);
 
 const isChatBusy = computed(
@@ -125,22 +112,6 @@ function safeRenderMarkdown(text: string): string {
     }
 }
 
-function applyLatestAssistantState(target: ChatMessage, latest: ChatMessage) {
-    target.content = latest.content;
-    target.timestamp = latest.timestamp;
-    target.agentType = latest.agentType;
-    target.confidence = latest.confidence;
-    target.feedback = latest.feedback;
-    target.agentResponse = latest.agentResponse;
-    target.suggestions = latest.suggestions;
-    target.analysisSteps = latest.analysisSteps;
-    target.routingInfo = latest.routingInfo;
-    target.isCollapsible = latest.isCollapsible;
-    if (latest.isCollapsed !== undefined) {
-        target.isCollapsed = latest.isCollapsed;
-    }
-}
-
 function showWelcome() {
     messages.value.push({
         id: generateId(),
@@ -155,6 +126,17 @@ function showWelcome() {
         isSystemMessage: true,
     });
 }
+
+const { deleteCurrentChat, loadChatById, loadLatestChat, startNewChat, syncRouteToExchange } = useChatGxyConversation({
+    chatContainer,
+    currentChatId,
+    hasLoadedInitialChat,
+    messages,
+    query,
+    prepareConversationReplay,
+    rebuildConversationMessages,
+    resetConversationState,
+});
 
 async function submitQuery() {
     if (!query.value.trim()) {
@@ -275,247 +257,11 @@ async function sendFeedback(messageId: string, value: "up" | "down") {
     }
 }
 
-async function fetchConversation(exchangeId: string): Promise<boolean> {
-    pendingCollapsedMessages.length = 0;
-
-    const { data: fullConversation } = await GalaxyApi().GET(`/api/chat/exchange/{exchange_id}/messages`, {
-        params: {
-            path: { exchange_id: exchangeId },
-        },
-    });
-
-    if (!fullConversation || fullConversation.length === 0) {
-        return false;
-    }
-
-    deliveredTaskIds.clear();
-    pyodideTaskToMessage.clear();
-    const taskIdToMessage: Record<string, ChatMessage> = {};
-    const pendingExecResults: Record<string, any> = {};
-    const assistantMessagesToReplay: ChatMessage[] = [];
-    const rebuiltMessages: ChatMessage[] = [];
-    let currentTurnAssistant: ChatMessage | null = null;
-
-    for (const [index, msg] of fullConversation.entries()) {
-        if (msg.role === "execution_result") {
-            if (msg.task_id) {
-                deliveredTaskIds.add(String(msg.task_id));
-                const target = taskIdToMessage[String(msg.task_id)];
-                if (target) {
-                    applyExecutionResultMetadata(target, msg);
-                } else {
-                    pendingExecResults[String(msg.task_id)] = msg;
-                }
-            }
-            continue;
-        }
-
-        if (msg.role !== "user" && msg.role !== "assistant") {
-            continue;
-        }
-
-        const message: ChatMessage = {
-            id: `hist-${msg.role}-${exchangeId}-${index}`,
-            role: msg.role as "user" | "assistant",
-            content: msg.content,
-            timestamp: msg.timestamp ? new Date(msg.timestamp) : new Date(),
-            feedback: null,
-        };
-
-        if (msg.role === "user") {
-            currentTurnAssistant = null;
-            rebuiltMessages.push(message);
-            continue;
-        }
-
-        message.agentType = msg.agent_response?.agent_type || msg.agent_type;
-        message.confidence = msg.agent_response?.confidence || "medium";
-        message.feedback = msg.feedback === 1 ? "up" : msg.feedback === 0 ? "down" : null;
-
-        if (msg.agent_response) {
-            message.agentResponse = msg.agent_response;
-            message.suggestions = msg.agent_response.suggestions || [];
-            const metadata = msg.agent_response?.metadata;
-            const steps = metadata ? normaliseAnalysisSteps(metadata?.analysis_steps) : [];
-            if (steps.length) {
-                message.analysisSteps = steps;
-            }
-            if (metadata) {
-                const artifactSource = metadata?.artifacts ?? metadata?.execution?.artifacts;
-                const storedArtifacts = normaliseArtifactList(artifactSource);
-                updateMessageOutputsFromArtifacts(message, storedArtifacts);
-                const plots = normalisePathList(metadata?.plots);
-                message.generatedPlots = plots.length ? plots : undefined;
-                const files = normalisePathList(metadata?.files);
-                message.generatedFiles = files.length ? files : undefined;
-                const executedTask = metadata?.executed_task;
-                const pendingTask = metadata?.pyodide_task;
-                const taskIdsToCheck = [executedTask?.task_id, pendingTask?.task_id].filter(Boolean) as string[];
-
-                const taskTarget =
-                    currentTurnAssistant &&
-                    isDataAnalysisMessage(currentTurnAssistant) &&
-                    isDataAnalysisMessage(message)
-                        ? currentTurnAssistant
-                        : message;
-
-                if (executedTask?.task_id) {
-                    deliveredTaskIds.add(String(executedTask.task_id));
-                    pyodideTaskToMessage.set(String(executedTask.task_id), taskTarget);
-                    taskIdToMessage[String(executedTask.task_id)] = taskTarget;
-                }
-                if (pendingTask?.task_id) {
-                    pyodideTaskToMessage.set(String(pendingTask.task_id), taskTarget);
-                    taskIdToMessage[String(pendingTask.task_id)] = taskTarget;
-                }
-                taskIdsToCheck.forEach((taskId) => {
-                    if (pendingExecResults[taskId]) {
-                        applyExecutionResultMetadata(taskTarget, pendingExecResults[taskId]);
-                        delete pendingExecResults[taskId];
-                    }
-                });
-            }
-        }
-
-        applyCollapseState(message);
-
-        if (currentTurnAssistant && isDataAnalysisMessage(currentTurnAssistant) && isDataAnalysisMessage(message)) {
-            const history = currentTurnAssistant.collapsedHistory ? [...currentTurnAssistant.collapsedHistory] : [];
-            message.isCollapsed = true;
-            history.push(message);
-            currentTurnAssistant.collapsedHistory = history;
-            updateMessageOutputsFromArtifacts(currentTurnAssistant, message.artifacts);
-            currentTurnAssistant.generatedPlots = [
-                ...(currentTurnAssistant.generatedPlots || []),
-                ...(message.generatedPlots || []).filter(
-                    (entry) => !(currentTurnAssistant.generatedPlots || []).includes(entry),
-                ),
-            ];
-            currentTurnAssistant.generatedFiles = [
-                ...(currentTurnAssistant.generatedFiles || []),
-                ...(message.generatedFiles || []).filter(
-                    (entry) => !(currentTurnAssistant.generatedFiles || []).includes(entry),
-                ),
-            ];
-            applyLatestAssistantState(currentTurnAssistant, message);
-            continue;
-        }
-
-        currentTurnAssistant = message;
-        rebuiltMessages.push(message);
-        assistantMessagesToReplay.push(message);
-    }
-
-    messages.value = rebuiltMessages;
-
-    applyDatasetSelectionFromMessages(fullConversation);
-    assistantMessagesToReplay.forEach((assistantMessage) => maybeRunPyodideForMessage(assistantMessage));
-    if (pendingCollapsedMessages.length) {
-        pendingCollapsedMessages.forEach((msg) => messages.value.push(msg));
-        pendingCollapsedMessages.length = 0;
-    }
-
-    currentChatId.value = exchangeId;
-    nextTick(() => scrollToBottom(chatContainer.value));
-    return true;
-}
-
-async function loadChatById(exchangeId: string) {
-    try {
-        const loaded = await fetchConversation(exchangeId);
-        if (loaded) {
-            hasLoadedInitialChat.value = true;
-        } else {
-            // loadSingleMessageFallback(item); // TODO: Was added for DA agent
-        }
-    } catch (e) {
-        console.error("Failed to load chat by ID:", e);
-    }
-}
-
-async function loadLatestChat() {
-    try {
-        const { data, error } = await GalaxyApi().GET("/api/chat/history", {
-            params: {
-                query: { limit: 1 },
-            },
-        });
-
-        if (data && !error && data.length > 0) {
-            const latestChat = data[0] as unknown as ChatHistoryItem;
-            try {
-                const loaded = await fetchConversation(latestChat.id);
-                if (loaded) {
-                    hasLoadedInitialChat.value = true;
-                }
-            } catch (e) {
-                console.error("Error loading latest conversation:", e);
-            }
-        }
-    } catch (e) {
-        console.error("Failed to load latest chat:", e);
-    }
-}
-
-function startNewChat() {
-    pendingCollapsedMessages.length = 0;
-    messages.value = [
-        {
-            id: generateId(),
-            role: "assistant",
-            content: "New conversation started. How can I help?",
-            timestamp: new Date(),
-            agentType: "router",
-            confidence: "high",
-            feedback: null,
-            isSystemMessage: true,
-        },
-    ];
-    Object.keys(pyodideExecutions).forEach((key) => delete pyodideExecutions[key]);
-    currentChatId.value = null;
-    deliveredTaskIds.clear();
-    pyodideTaskToMessage.clear();
-    selectedDatasets.value = [];
-    query.value = "";
-    syncRouteToExchange(null);
-}
-
-async function deleteCurrentChat() {
-    if (!currentChatId.value) {
-        return;
-    }
-    try {
-        const { error } = await GalaxyApi().DELETE("/api/chat/exchange/{exchange_id}", {
-            params: { path: { exchange_id: currentChatId.value } },
-        });
-        if (!error) {
-            startNewChat();
-        }
-    } catch (e) {
-        console.error("Failed to delete chat:", e);
-    }
-}
-
 function popOutToScratchbook() {
     const Galaxy = getGalaxyInstance();
     const path = currentChatId.value ? `/chatgxy/${currentChatId.value}` : "/chatgxy";
     const url = `${path}?compact=true`;
     Galaxy.frame.add({ title: "ChatGXY", url });
-}
-
-function syncRouteToExchange(exchangeId: string | null) {
-    if (typeof window === "undefined") {
-        return;
-    }
-    const currentUrl = new URL(window.location.href);
-    const compactValue = currentUrl.searchParams.get("compact");
-    const nextPath = exchangeId ? `/chatgxy/${exchangeId}` : "/chatgxy";
-    const nextSearch = compactValue !== null ? `?compact=${compactValue}` : "";
-    const nextUrl = `${nextPath}${nextSearch}`;
-    if (`${currentUrl.pathname}${currentUrl.search}` === nextUrl) {
-        return;
-    }
-    window.history.replaceState(window.history.state, "", nextUrl);
 }
 </script>
 
