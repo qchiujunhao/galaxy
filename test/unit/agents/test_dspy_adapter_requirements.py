@@ -1,3 +1,8 @@
+import json
+from types import SimpleNamespace
+
+from galaxy.agents.base import GalaxyAgentDependencies
+from galaxy.agents.dspy_adapter import GalaxyDSPyPlanner
 from galaxy.util.pyodide import infer_requirements_from_python
 
 
@@ -34,3 +39,28 @@ def test_infer_requirements_respects_explicit_marker():
     # We still union in inferred imports.
     assert "numpy" in requirements
     assert "json" not in requirements
+
+
+def test_dspy_initial_plan_limits_react_iterations(monkeypatch):
+    captured: dict[str, int] = {}
+
+    class _FakeModule:
+        def __init__(self, tools, max_iters=5):
+            captured["max_iters"] = max_iters
+
+        def __call__(self, question, context):
+            return SimpleNamespace(answer=json.dumps({"explanation": "ok", "plots": [], "files": []}), trajectory={})
+
+    monkeypatch.setattr("galaxy.agents.dspy_adapter.GalaxyDataAnalysisModule", _FakeModule)
+    monkeypatch.setattr(GalaxyDSPyPlanner, "_configure_lm", lambda self: None)
+
+    deps = GalaxyAgentDependencies(
+        trans=SimpleNamespace(),
+        user=None,
+        config=SimpleNamespace(ai_model=None, ai_api_key=None, ai_api_base_url=None),
+    )
+    planner = GalaxyDSPyPlanner(deps)
+
+    planner.plan(question="run an EDA", context_text="DATASETS:\n- None")
+
+    assert captured["max_iters"] == GalaxyDSPyPlanner._INITIAL_PLAN_MAX_ITERS

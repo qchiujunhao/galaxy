@@ -280,6 +280,7 @@ class GalaxyDSPyPlanner:
 
     _EXAMPLES_CACHE: ClassVar[Optional[List[Any]]] = None
     _GLOBAL_LM_CONFIGURED: bool = False
+    _INITIAL_PLAN_MAX_ITERS: ClassVar[int] = 2
     _PACKAGE_HINTS: ClassVar[List[tuple[str, str]]] = [
         ("matplotlib", r"\bmatplotlib\b|\bplt\."),
         ("seaborn", r"\bseaborn\b|\bsns\."),
@@ -310,7 +311,14 @@ class GalaxyDSPyPlanner:
         self._configure_lm()
         code_tool = CodeCaptureTool()
         dataset_tool = DatasetLookupTool(self._deps)
-        module = GalaxyDataAnalysisModule([code_tool, dataset_tool])
+        # Initial planning should only need enough tool iterations to resolve
+        # datasets and emit a single code block. Additional ReAct turns after
+        # the first code capture only create duplicate `python_code_executor`
+        # observations while Galaxy is still awaiting execution results.
+        module = GalaxyDataAnalysisModule(
+            [code_tool, dataset_tool],
+            max_iters=self._INITIAL_PLAN_MAX_ITERS,
+        )
 
         # Use cached examples to avoid recompiling on every request (not currently fed into the module, but kept ready)
         examples: List[Any] = self._examples
