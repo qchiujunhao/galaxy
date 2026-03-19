@@ -2,7 +2,7 @@
 import { computed } from "vue";
 
 import type { ChatMessage, ExecutionState } from "./types";
-import { hasCollapsedHistory, isDataAnalysisMessage } from "./utilities";
+import { hasCollapsedHistory } from "./utilities";
 
 import AnalysisSteps from "./AnalysisSteps.vue";
 import CollapsedHistoryMessages from "./CollapsedHistoryMessages.vue";
@@ -56,10 +56,7 @@ const hasIntermediateDetails = computed(() => {
                 v-if="props.message.role === 'assistant' && pyodideStateForMessage"
                 :state="pyodideStateForMessage" />
 
-            <CollapsedHistoryMessages
-                v-if="!isDataAnalysisMessage(props.message) && hasCollapsedHistory(props.message)"
-                :message="props.message"
-                collapsible />
+            <CollapsedHistoryMessages v-if="hasCollapsedHistory(props.message)" :message="props.message" collapsible />
         </div>
     </details>
 </template>
