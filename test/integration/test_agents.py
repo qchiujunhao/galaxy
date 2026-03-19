@@ -1,32 +1,16 @@
-"""Test Galaxy AI agents API and functionality.
+"""Test Galaxy AI agents API with live LLM.
 
-This module contains two test suites:
-1. Mocked tests - Deterministic tests with mocked LLM responses (always run)
-2. Live LLM tests - Integration tests requiring configured LLM (optional, marked with @pytest.mark.requires_llm)
+Requires a configured LLM — skipped unless GALAXY_TEST_ENABLE_LIVE_LLM=1.
+For deterministic tests without LLM, see test_static_agent_backend.py.
 
-## Running the tests:
-
-### API tests (Galaxy test instance auto-configured):
-    # Run mocked API tests (Galaxy test framework handles setup):
-    pytest test/integration/test_agents.py::TestAgentsApiMocked -v
-
-    # Run live LLM API tests:
-    GALAXY_TEST_ENABLE_LIVE_LLM=1 pytest test/integration/test_agents.py::TestAgentsApiLiveLLM -v
-
-### Configuration for live API tests (TestAgentsApiLiveLLM):
+## Running:
     export GALAXY_TEST_AI_API_KEY="your-api-key"
     export GALAXY_TEST_AI_MODEL="llama-4-scout"
     export GALAXY_TEST_AI_API_BASE_URL="http://localhost:4000/v1/"
     export GALAXY_TEST_ENABLE_LIVE_LLM=1
-
-### Configuration for live unit tests (TestAgentUnitLiveLLM):
-    export GALAXY_AI_API_KEY="your-api-key"
-    export GALAXY_AI_MODEL="llama-4-scout"
-    export GALAXY_AI_API_BASE_URL="http://localhost:4000/v1/"
-    export GALAXY_TEST_ENABLE_LIVE_LLM=1
+    pytest test/integration/test_agents.py -v
 """
 
-import json
 import logging
 import os
 from unittest.mock import (
@@ -36,7 +20,7 @@ from unittest.mock import (
 )
 
 from galaxy.agents import (
-    agent_registry,
+    build_default_registry,
     GalaxyAgentDependencies,
 )
 from galaxy.agents.error_analysis import ErrorAnalysisResult
@@ -50,6 +34,7 @@ from galaxy_test.base.populators import (
 from galaxy_test.driver.integration_util import IntegrationTestCase
 
 log = logging.getLogger(__name__)
+agent_registry = build_default_registry()
 
 
 class AgentIntegrationTestCase(IntegrationTestCase):
@@ -331,8 +316,6 @@ class TestAgentsApiMocked(AgentIntegrationTestCase):
 # ============================================================================
 # LIVE LLM TEST SUITE - Requires configured LLM
 # ============================================================================
-
-
 @pytestmark_live_llm
 class TestAgentsApiLiveLLM(AgentIntegrationTestCase):
     """Test Galaxy AI agents API with real LLM.

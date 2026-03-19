@@ -96,7 +96,7 @@ object_store_instances:
   index:
     selectors:
       create_button: '#create-button-galaxy-storage'
-      _: '#user-object-stores-index'
+      _: '#g-table-user-object-stores-index'
 
   create:
     selectors:
@@ -108,7 +108,7 @@ file_source_instances:
   index:
     selectors:
       create_button: '#create-button-my-repositories'
-      _: '#user-file-sources-index'
+      _: '#g-table-user-file-sources-index'
 
   create:
     selectors:
@@ -552,6 +552,7 @@ files_dialog:
     ftp_details: 'span[title="details-gxftp://"]'
     row: 'span[title="label-${uri}"]'
     back_btn: '#back-btn'
+    options_ready: '[data-description="selection dialog options"] .selection-dialog-table[aria-busy="false"]'
 
 history_export:
   selectors:
@@ -1159,18 +1160,10 @@ custom_tools:
 admin:
   allowlist:
     selectors:
-      toolshed:
-        type: xpath
-        selector: '//a[contains(text(), "Toolshed Tools")]'
-      local:
-        type: xpath
-        selector: '//a[contains(text(), "Local Tools")]'
-      sanitized:
-        type: xpath
-        selector: '//a[contains(text(), "HTML Sanitized")]'
-      rendered_active:
-        type: xpath
-        selector: '//div[contains(@class, "active")]//a[contains(text(), "HTML Rendered")]'
+      toolshed: 'a[data-tab-title="Toolshed Tools"]'
+      local: 'a[data-tab-title="Local Tools"]'
+      sanitized: 'a[data-tab-title="HTML Sanitized"]'
+      rendered_active: '.tab-pane.active a[data-tab-title="HTML Rendered"]'
 
   manage_dependencies:
     selectors:
@@ -1460,6 +1453,68 @@ job_details:
       type: xpath
       selector: '//td[@id="galaxy-tool-id"][normalize-space(text()) = "${tool_id}"]'
     tool_exit_code: '#exit-code'
+
+chatgxy:
+  selectors:
+    activity: '#activity-chatgxy'
+    _: '.chatgxy-container'
+    header: '.chatgxy-header'
+    new_chat_button: '.chatgxy-header .btn-outline-primary'
+    delete_chat_button: '.chatgxy-header .btn-outline-danger'
+    messages: '.chat-messages'
+    input: '#chat-input'
+    send_button: '.send-button'
+    welcome_message: '.system-notice'
+    query_cell: '.entry-query .query-text'
+    response_cell: '.entry-response'
+    response_content: '.entry-response .response-content'
+    agent_indicator: '.entry-response .agent-indicator'
+    loading: '.loading-entry'
+    feedback_up: '.entry-response .feedback-btn[title="Helpful"]'
+    feedback_down: '.entry-response .feedback-btn[title="Not helpful"]'
+    feedback_ack: '.entry-response .feedback-ack'
+    meta_tag: '.entry-response .meta-tag'
+
+  history_panel:
+    selectors:
+      _: '.activity-panel[data-description="ChatGXY"]'
+      toggle_selection_mode: 'button[title="Select chats to delete"]'
+      cancel_selection: 'button[title="Cancel selection"]'
+      history_item: '[data-description="sidebar item"]'
+      history_checkbox: '[data-description="sidebar item"] .history-checkbox'
+      delete_selected_button: '.selection-toolbar .btn-danger'
+      select_all_toggle: '.select-all-toggle'
+      empty_message: '[data-description="sidebar list empty"]'
+
+galaxy_wizard:
+  selectors:
+    _:
+      selector: 'galaxy wizard'
+      type: data-description
+    analyze_button:
+      selector: 'galaxy wizard analyze button'
+      type: data-description
+    loading:
+      selector: 'galaxy wizard loading'
+      type: data-description
+    response:
+      selector: 'galaxy wizard response'
+      type: data-description
+    feedback_section:
+      selector: 'galaxy wizard feedback'
+      type: data-description
+    feedback_up:
+      selector: 'galaxy wizard feedback up'
+      type: data-description
+    feedback_down:
+      selector: 'galaxy wizard feedback down'
+      type: data-description
+    feedback_ack:
+      selector: 'galaxy wizard feedback ack'
+      type: data-description
+    wizard_card:
+      selector: 'galaxy wizard card'
+      type: data-description
 
 zip_import_wizard:
   selectors:

@@ -7925,6 +7925,16 @@ export interface components {
              */
             type: string;
         };
+        /** BibtexCitationResponse */
+        BibtexCitationResponse: {
+            /** Content */
+            content: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            format: "bibtex";
+        };
         /** Body_analyze_error_api_ai_agents_error_analysis_post */
         Body_analyze_error_api_ai_agents_error_analysis_post: {
             /**
@@ -8547,6 +8557,18 @@ export interface components {
             content: string;
             /** type */
             type: string;
+        };
+        /** CitationErrorResponse */
+        CitationErrorResponse: {
+            /** Error */
+            error: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            format: "error";
+            /** Tool Id */
+            tool_id: string;
         };
         /** ClaimLandingPayload */
         ClaimLandingPayload: {
@@ -11183,9 +11205,8 @@ export interface components {
             /**
              * User Id
              * @description ID of the user who owns the referenced dataset.
-             * @example 0123456789ABCDEF
              */
-            user_id: string;
+            user_id: string | null;
         };
         /**
          * DatasetPermissionAction
@@ -33284,7 +33305,10 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown[];
+                    "application/json": (
+                        | components["schemas"]["BibtexCitationResponse"]
+                        | components["schemas"]["CitationErrorResponse"]
+                    )[];
                 };
             };
             /** @description Request Error */
