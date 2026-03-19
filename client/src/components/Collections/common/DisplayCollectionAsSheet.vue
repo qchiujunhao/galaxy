@@ -94,10 +94,10 @@ const defaultColDef = ref<ColDef>({
 
 <template>
     <div>
-        <LoadingSpan v-if="!collection" />
-        <BAlert v-else-if="collectionLoadError" variant="danger" show dismissible>
+        <BAlert v-if="collectionLoadError" variant="danger" show dismissible>
             {{ collectionLoadError }}
         </BAlert>
+        <LoadingSpan v-else-if="!collection" />
         <div v-else>
             <div :class="theme">
                 <AgGridVue

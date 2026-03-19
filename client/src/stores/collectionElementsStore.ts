@@ -79,6 +79,12 @@ export const useCollectionElementsStore = defineStore("collectionElementsStore",
         };
     });
 
+    const getLoadingCollectionErrorById = computed(() => {
+        return (collectionId: string) => {
+            return loadingCollectionElementsErrors.value[collectionId] ?? false;
+        };
+    });
+
     type FetchParams = {
         storedElements: DCEEntry[];
         collection: CollectionEntry;
@@ -257,6 +263,7 @@ export const useCollectionElementsStore = defineStore("collectionElementsStore",
         getCollectionElements,
         isLoadingCollectionElements,
         getLoadingCollectionElementsError,
+        getLoadingCollectionErrorById,
         loadingCollectionElementsErrors,
         getCollectionById,
         getDetailedCollectionById,

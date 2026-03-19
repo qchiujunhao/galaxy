@@ -14,11 +14,9 @@ export function useDetailedCollection<T extends Props>(props: T) {
         return collectionStore.getDetailedCollectionById(props.collectionId);
     });
     const collectionLoadError = computed(() => {
-        if (collection.value) {
-            const collectionElementLoadError = collectionStore.getLoadingCollectionElementsError(collection.value);
-            if (collectionElementLoadError) {
-                return errorMessageAsString(collectionElementLoadError);
-            }
+        const collectionElementLoadError = collectionStore.getLoadingCollectionErrorById(props.collectionId);
+        if (collectionElementLoadError) {
+            return errorMessageAsString(collectionElementLoadError);
         }
         return undefined;
     });
