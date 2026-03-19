@@ -1,4 +1,4 @@
-"""DA execution endpoints for chat-backed Pyodide flows."""
+"""Data analysis chat execution endpoints for chat-backed Pyodide flows."""
 
 import mimetypes
 import os
@@ -56,7 +56,7 @@ def _guess_extension(filename: Optional[str], mime_type: Optional[str]) -> str:
 
 
 @router.cbv
-class ChatExecutionAPI:
+class DataAnalysisChatExecutionAPI:
     chat_manager: ChatManager = depends(ChatManager)
     agent_service: AgentService = depends(AgentService)
     chat_execution_service: ChatExecutionService = depends(ChatExecutionService)
